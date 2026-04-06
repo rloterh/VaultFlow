@@ -43,3 +43,6 @@ coverage/
 
 # Misc
 *.pem
+
+# Claude
+.claude/
