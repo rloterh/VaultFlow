@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* Smooth scroll */
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Remove default focus outline — we use ring utilities */
+*:focus {
+  outline: none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: theme(--color-neutral-300);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: theme(--color-neutral-400);
+}
+
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb {
+    background: theme(--color-neutral-700);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: theme(--color-neutral-600);
+  }
+}
+
+/* Transition utilities */
+.transition-sidebar {
+  transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
