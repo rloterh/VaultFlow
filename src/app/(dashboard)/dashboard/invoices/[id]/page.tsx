@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  ArrowLeft, Send, CheckCircle2, Printer,
+  ArrowLeft, Send, CheckCircle2, Download,
   FileText, Clock, Building2,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -135,8 +135,17 @@ export default function InvoiceDetailPage() {
               Mark as paid
             </Button>
           )}
-          <Button variant="outline" leftIcon={<Printer className="h-4 w-4" />}>
-            Print
+          <Button
+            variant="outline"
+            leftIcon={<Download className="h-4 w-4" />}
+            onClick={() => {
+              const link = document.createElement("a");
+              link.href = `/api/invoices/${id}/pdf`;
+              link.download = `${invoice.invoice_number}.pdf`;
+              link.click();
+            }}
+          >
+            Download PDF
           </Button>
         </div>
       </div>
