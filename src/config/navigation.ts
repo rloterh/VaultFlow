@@ -29,6 +29,7 @@ export const mainNavItems: NavItem[] = [
     title: "Invoices",
     href: "/dashboard/invoices",
     icon: FileText,
+    badge: "10",
   },
   {
     title: "Clients",
