@@ -9,6 +9,7 @@ export async function middleware(request: NextRequest) {
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api/webhooks") ||
+    pathname.startsWith("/api/stripe/webhooks") ||
     pathname.includes(".")
   ) {
     return NextResponse.next();

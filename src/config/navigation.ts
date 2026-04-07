@@ -6,6 +6,7 @@ import {
   Settings,
   CreditCard,
   Building2,
+  Shield,
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "./roles";
@@ -41,6 +42,12 @@ export const mainNavItems: NavItem[] = [
     href: "/dashboard/reports",
     icon: BarChart3,
     minRole: "manager",
+  },
+  {
+    title: "Admin",
+    href: "/dashboard/admin",
+    icon: Shield,
+    minRole: "admin",
   },
 ];
 
