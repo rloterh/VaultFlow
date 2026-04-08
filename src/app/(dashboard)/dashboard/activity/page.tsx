@@ -48,7 +48,9 @@ const actionLabels: Record<string, string> = {
   "org.updated": "Updated settings",
 };
 
-const actionColors: Record<string, string> = {
+type ActivityBadgeVariant = "success" | "info" | "danger";
+
+const actionColors: Record<string, ActivityBadgeVariant> = {
   "invoice.paid": "success",
   "invoice.sent": "info",
   "invoice.deleted": "danger",
@@ -122,7 +124,8 @@ export default function ActivityPage() {
               const label = actionLabels[entry.action] ?? entry.action;
               const color = actionColors[entry.action];
               const actorName = entry.actor?.full_name || entry.actor?.email || "System";
-              const detail = (entry.metadata as any)?.name || (entry.metadata as any)?.email || (entry.metadata as any)?.number || "";
+              const metadata = entry.metadata as { name?: string; email?: string; number?: string };
+              const detail = metadata.name || metadata.email || metadata.number || "";
 
               return (
                 <div key={entry.id} className="flex items-start gap-4 py-4 first:pt-0 last:pb-0">
@@ -137,7 +140,7 @@ export default function ActivityPage() {
                     </p>
                     <p className="mt-0.5 text-xs text-neutral-400">{formatRelativeTime(entry.created_at)}</p>
                   </div>
-                  {color && <Badge variant={color as any} className="mt-1 shrink-0">{label.split(" ").pop()}</Badge>}
+                  {color && <Badge variant={color} className="mt-1 shrink-0">{label.split(" ").pop()}</Badge>}
                 </div>
               );
             })}
