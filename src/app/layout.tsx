@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { SupabaseProvider } from "@/components/providers/supabase-provider";
 import { ToastContainer } from "@/components/ui/toast";
+import { applicationJsonLd, organizationJsonLd } from "@/lib/seo/structured-data";
 import "./globals.css";
 
 const inter = Inter({
@@ -53,6 +54,11 @@ export default function RootLayout({
       className={`${inter.variable} ${jetbrainsMono.variable}`}
       suppressHydrationWarning
     >
+      <head>
+        <link rel="preconnect" href={process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: applicationJsonLd() }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: organizationJsonLd() }} />
+      </head>
       <body className="min-h-screen bg-white font-sans text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100">
         <SupabaseProvider>
           {children}
