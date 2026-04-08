@@ -1,117 +1,137 @@
-# VaultFlow
+# VaultFlow — SaaS Financial Dashboard & Invoice Platform
 
-Enterprise-grade financial dashboard and invoice management platform built with Next.js, Supabase, Stripe, and Tailwind CSS.
-
-## Tech Stack
-
-- **Framework:** Next.js 15 (App Router, React 19, TypeScript)
-- **Styling:** Tailwind CSS 4, Framer Motion
-- **State:** Zustand 5 (persisted stores)
-- **Database:** Supabase (PostgreSQL + Auth + Realtime + RLS)
-- **Payments:** Stripe (Checkout, Customer Portal, Webhooks)
-- **PDF:** jsPDF + jspdf-autotable (server-side generation)
-- **Charts:** Recharts (area, donut, bar)
-- **CI/CD:** GitHub Actions
-- **Deploy:** Vercel + Cloudflare
-- **Security:** RBAC, JWT, RLS, CSP headers, OWASP practices
+A production-grade, multi-tenant SaaS financial dashboard built with Next.js, Supabase, Stripe, and Recharts. Features RBAC, real-time analytics, PDF invoice generation, subscription billing, and a full admin panel.
 
 ## Features
 
-- Multi-tenant organizations with role-based access (owner/admin/manager/member)
-- Real-time dashboard with KPI cards, revenue charts, and activity feed
-- Invoice CRUD with status lifecycle (draft → sent → viewed → paid → overdue)
-- Client management with invoice history and revenue tracking
-- PDF invoice generation with professional branded template
-- Stripe subscription billing with plan upgrade/downgrade
-- Secure webhook handling for payment events
-- Admin panel with org overview and member management
-- Reports with 12-month trends, status breakdown, and top clients
-- Dark mode, responsive design, keyboard shortcuts
+- **Multi-tenant RBAC** — 4-role hierarchy (owner/admin/manager/member) with 18 granular permissions
+- **Real-time dashboard** — Revenue area chart, invoice status donut, metric cards with live Supabase subscriptions
+- **Invoice management** — Full CRUD with status lifecycle (draft → sent → viewed → paid → overdue), line items, and auto-total calculation
+- **PDF generation** — Branded A4 invoices with jsPDF, downloadable via API route
+- **Client management** — Directory with contact info, invoice history, and revenue tracking
+- **Stripe subscriptions** — Checkout sessions, customer portal, webhook lifecycle management
+- **Reports** — 12-month revenue trends, top clients bar chart, exportable analytics
+- **Admin panel** — Organization overview, member management with role changes
+- **Activity log** — Audit trail of all org actions with relative timestamps
+- **Settings** — Profile editing, org configuration, notification preferences, danger zone
+- **SEO** — JSON-LD structured data, dynamic sitemap, robots.txt, OG image generation
 
-## Quick Start
+## Tech Stack
 
-```bash
-# 1. Clone and install
-git clone https://github.com/rloterh/VaultFlow.git
-cd VaultFlow
-npm install
-
-# 2. Set up environment
-cp .env.example .env.local
-# Fill in Supabase and Stripe keys
-
-# 3. Set up database
-# Paste supabase-schema-v1.sql (from PHASE-1-GUIDE.md) in Supabase SQL Editor
-# Then paste supabase-schema-v2.sql
-
-# 4. Run
-npm run dev
 ```
-
-## Supabase Setup
-
-1. Create a project at [supabase.com](https://supabase.com)
-2. Run the SQL schemas in order (Phase 1, then Phase 2)
-3. Enable Auth providers: Email, Google, GitHub
-4. Set redirect URL: `http://localhost:3000/api/auth/callback`
-5. After first signup, seed demo data:
-   ```sql
-   SELECT seed_demo_data('your-org-uuid', 'your-user-uuid');
-   ```
-
-## Stripe Setup
-
-1. Create products and prices in [Stripe Dashboard](https://dashboard.stripe.com)
-2. Copy price IDs to `.env.local`
-3. Set up webhook endpoint: `https://your-domain/api/stripe/webhooks`
-4. Events to listen for:
-   - `checkout.session.completed`
-   - `customer.subscription.updated`
-   - `customer.subscription.deleted`
-   - `invoice.paid`
-   - `invoice.payment_failed`
-5. For local development:
-   ```bash
-   stripe listen --forward-to localhost:3000/api/stripe/webhooks
-   ```
+Next.js 16        React 19           TypeScript 5.7+
+Tailwind CSS 4    Zustand 5          Supabase (Auth + DB + Realtime + RLS)
+Stripe            Recharts           jsPDF
+Framer Motion     Lucide React
+```
 
 ## Project Structure
 
 ```
 src/
-├── app/              # Next.js App Router pages
-│   ├── (auth)/       # Login, signup, forgot password
-│   ├── (dashboard)/  # Protected dashboard pages
-│   └── api/          # Route handlers (auth, stripe, pdf)
-├── components/       # UI components
-│   ├── ui/           # Design system primitives
-│   ├── charts/       # Recharts wrappers
-│   ├── auth/         # Auth forms and guards
-│   └── layout/       # Sidebar, header
-├── stores/           # Zustand state management
-├── hooks/            # Custom React hooks
-├── lib/              # Utilities and clients
-│   ├── supabase/     # DB clients, queries, realtime
-│   ├── stripe/       # Payment integration
-│   └── pdf/          # Invoice PDF generation
-├── config/           # RBAC roles, navigation, site
-└── types/            # TypeScript type definitions
+├── app/
+│   ├── (auth)/              # Login, signup, forgot-password
+│   ├── (dashboard)/
+│   │   ├── dashboard/       # Overview, invoices, clients, reports, activity, admin
+│   │   └── settings/        # General, team, billing
+│   ├── api/
+│   │   ├── auth/callback/   # Supabase OAuth callback
+│   │   ├── invoices/[id]/pdf/ # PDF download endpoint
+│   │   ├── stripe/          # Checkout, portal, webhooks
+│   │   └── og/              # Dynamic OG image generation
+│   ├── sitemap.ts           # XML sitemap
+│   └── robots.ts            # Crawler directives
+├── components/
+│   ├── ui/                  # Button, Input, Card, Badge, DataTable, Toast, etc.
+│   ├── charts/              # RevenueChart, StatusChart (Recharts)
+│   ├── layout/              # Sidebar (collapsible), Header
+│   ├── auth/                # LoginForm, SignupForm, OAuthButtons, AuthGuard
+│   └── providers/           # SupabaseProvider
+├── stores/                  # Zustand: auth, org, ui (with persist)
+├── hooks/                   # useAuth, usePermissions, useStripe
+├── lib/
+│   ├── supabase/            # Client, server, middleware, queries, realtime
+│   ├── stripe/              # Server client, browser helpers
+│   ├── pdf/                 # jsPDF invoice generator
+│   ├── seo/                 # Structured data, metadata helpers
+│   └── utils/               # cn, constants
+├── config/                  # Navigation (RBAC-filtered), roles, site
+└── types/                   # Auth, database types
 ```
+
+## Database Schema
+
+3 SQL files across 4 phases:
+
+| File | Tables | Features |
+|------|--------|----------|
+| `supabase-schema.sql` | organizations, profiles, org_memberships, org_invites | RBAC, auto-profile trigger, RLS |
+| `supabase-schema-v2.sql` | invoices, clients, line_items, activity_log | Auto-totals trigger, activity logging |
+| *(inline Phase 3)* | Stripe fields on organizations | subscription_id, customer_id |
+
+## Quick Start
+
+```bash
+# 1. Create project
+npx create-next-app@latest vaultflow --typescript --tailwind --eslint --app --src-dir
+
+# 2. Install dependencies
+npm install zustand @supabase/supabase-js @supabase/ssr framer-motion \
+  clsx tailwind-merge lucide-react recharts jspdf stripe @stripe/stripe-js
+
+# 3. Setup environment
+cp .env.example .env.local
+# Fill in Supabase + Stripe keys
+
+# 4. Database
+# Paste supabase-schema.sql then supabase-schema-v2.sql into Supabase SQL Editor
+
+# 5. Stripe webhook
+# Point to /api/stripe/webhooks with events:
+# checkout.session.completed, customer.subscription.updated,
+# customer.subscription.deleted, invoice.paid, invoice.payment_failed
+
+# 6. Run
+npm run dev
+```
+
+## Environment Variables
+
+```env
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
+
+# App
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_APP_NAME=VaultFlow
+```
+
+## RBAC Permission Matrix
+
+| Permission | Owner | Admin | Manager | Member |
+|-----------|-------|-------|---------|--------|
+| org:update/delete/billing | ✓/✓/✓ | ✓/✗/✓ | ✗ | ✗ |
+| members:invite/remove/role | ✓ | ✓ | ✗ | ✗ |
+| invoices:create/update/delete/send | ✓ | ✓ | ✓(no delete) | read-only |
+| clients:create/update/delete | ✓ | ✓ | ✓(no delete) | read-only |
+| reports:read/export | ✓ | ✓ | read | read |
+| settings:read/update | ✓ | ✓ | read | read |
 
 ## Deployment
 
-### Vercel (recommended)
 ```bash
+# Vercel (recommended)
 vercel deploy
-```
-Set environment variables in Vercel dashboard.
 
-### Docker
-```bash
-docker build \
-  --build-arg NEXT_PUBLIC_SUPABASE_URL=... \
-  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=... \
-  -t vaultflow .
+# Docker
+docker build -t vaultflow .
 docker run -p 3000:3000 vaultflow
 ```
 
