@@ -177,6 +177,15 @@ function describeBillingEvent(entry: ActivityEntry): BillingTimelineItem {
         tone: "danger",
         createdAt: entry.created_at,
       };
+    case "invoice.stripe_linked":
+      return {
+        id: entry.id,
+        title: "Stripe linkage updated",
+        description:
+          "Finance stored Stripe invoice identifiers to make later billing events attach directly to this invoice.",
+        tone: "info",
+        createdAt: entry.created_at,
+      };
     case "payment_recorded":
       return {
         id: entry.id,

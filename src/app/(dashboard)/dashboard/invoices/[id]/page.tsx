@@ -11,6 +11,7 @@ import {
   Building2,
   CheckCircle2,
   Clock,
+  CreditCard,
   Download,
   Eye,
   ExternalLink,
@@ -52,6 +53,7 @@ import {
   type InvoiceHistoryEntryRecord,
 } from "@/lib/invoices/history";
 import { getInvoicePaymentSummary } from "@/lib/invoices/payments";
+import { buildInvoiceBillingReference, buildInvoiceIdentifiers } from "@/lib/invoices/reference";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import {
   fetchVendorAssignedClientIds,
@@ -120,6 +122,27 @@ const transitionIconMap = {
   cancelled: XCircle,
 };
 
+function getNextLifecycleStatus(
+  currentStatus: Invoice["status"],
+  dueDate: string,
+  outstandingAmount: number,
+  voidedAt?: string | null
+): Invoice["status"] {
+  if (voidedAt) {
+    return "cancelled";
+  }
+
+  if (outstandingAmount <= 0) {
+    return "paid";
+  }
+
+  if (currentStatus === "draft" || currentStatus === "cancelled") {
+    return currentStatus;
+  }
+
+  return new Date(dueDate).getTime() < Date.now() ? "overdue" : "viewed";
+}
+
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -135,6 +158,12 @@ export default function InvoiceDetailPage() {
   const [recordingReminder, setRecordingReminder] = useState(false);
   const [recordingPayment, setRecordingPayment] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [adjustmentAmount, setAdjustmentAmount] = useState("");
+  const [adjustmentNote, setAdjustmentNote] = useState("");
+  const [ledgerActionLoading, setLedgerActionLoading] = useState<string | null>(null);
+  const [stripeInvoiceIdInput, setStripeInvoiceIdInput] = useState("");
+  const [stripePaymentIntentIdInput, setStripePaymentIntentIdInput] = useState("");
+  const [savingStripeLink, setSavingStripeLink] = useState(false);
   const intent = searchParams.get("intent");
 
   const fetchInvoice = useCallback(async () => {
@@ -297,6 +326,26 @@ export default function InvoiceDetailPage() {
     setRecordingReminder(false);
   }
 
+  async function recordBillingTimelineEvent(
+    targetInvoice: InvoiceDetailRecord,
+    action: string,
+    metadata: Record<string, unknown>
+  ) {
+    const sb = getSupabaseBrowserClient();
+
+    await sb.from("activity_log").insert({
+      org_id: targetInvoice.org_id,
+      user_id: user?.id ?? null,
+      entity_type: "billing",
+      entity_id: targetInvoice.id,
+      action,
+      metadata: {
+        ...buildInvoiceIdentifiers(targetInvoice),
+        ...metadata,
+      },
+    });
+  }
+
   async function recordPayment() {
     if (!invoice || !user) {
       return;
@@ -314,9 +363,19 @@ export default function InvoiceDetailPage() {
 
     const currentPaid = Number(invoice.amount_paid) || 0;
     const total = Number(invoice.total) || 0;
-    const nextPaid = Math.min(currentPaid + amount, total);
-    const balance = Math.max(total - nextPaid, 0);
-    const nextStatus = balance === 0 ? "paid" : invoice.status;
+    const maxGrossCollection = total + Number(invoice.refunded_amount ?? 0);
+    const nextPaid = Math.min(currentPaid + amount, maxGrossCollection);
+    const nextSummary = getInvoicePaymentSummary({
+      ...invoice,
+      amount_paid: nextPaid,
+    });
+    const balance = nextSummary.outstandingAmount;
+    const nextStatus = getNextLifecycleStatus(
+      invoice.status,
+      invoice.due_date,
+      balance,
+      invoice.voided_at ?? null
+    );
     const nowIso = new Date().toISOString();
 
     setRecordingPayment(true);
@@ -349,8 +408,7 @@ export default function InvoiceDetailPage() {
       entity_id: invoice.id,
       action: "payment_recorded",
       metadata: {
-        invoice_id: invoice.id,
-        invoice_number: invoice.invoice_number,
+        ...buildInvoiceIdentifiers(invoice),
         amount,
         resulting_amount_paid: nextPaid,
         resulting_balance: balance,
@@ -369,8 +427,7 @@ export default function InvoiceDetailPage() {
       amount,
       currency: invoice.currency,
       metadata: {
-        invoice_id: invoice.id,
-        invoice_number: invoice.invoice_number,
+        ...buildInvoiceIdentifiers(invoice),
         resulting_amount_paid: nextPaid,
         resulting_balance: balance,
         fully_paid: balance === 0,
@@ -385,12 +442,21 @@ export default function InvoiceDetailPage() {
       invoiceNumber: invoice.invoice_number,
       action: "invoice.payment_recorded",
       metadata: {
+        ...buildInvoiceIdentifiers(invoice),
         amount,
         resulting_amount_paid: nextPaid,
         resulting_balance: balance,
         fully_paid: balance === 0,
         source: "manual_reconciliation",
       },
+    });
+
+    await recordBillingTimelineEvent(invoice, "payment_recorded", {
+      amount,
+      resulting_amount_paid: nextPaid,
+      resulting_balance: balance,
+      fully_paid: balance === 0,
+      source: "manual_reconciliation",
     });
 
     setPaymentAmount("");
@@ -428,8 +494,9 @@ export default function InvoiceDetailPage() {
       invoiceNumber: invoice.invoice_number,
       action: "invoice.recovery_reviewed",
       metadata: {
+        ...buildInvoiceIdentifiers(invoice),
         outstanding_amount: paymentSummary.outstandingAmount,
-        collected_amount: paymentSummary.collectedAmount,
+        collected_amount: paymentSummary.netCollectedAmount,
         source_intent: intent ?? "inline",
       },
     });
@@ -444,12 +511,17 @@ export default function InvoiceDetailPage() {
       amount: paymentSummary.outstandingAmount,
       currency: invoice.currency,
       metadata: {
-        invoice_id: invoice.id,
-        invoice_number: invoice.invoice_number,
+        ...buildInvoiceIdentifiers(invoice),
         outstanding_amount: paymentSummary.outstandingAmount,
-        collected_amount: paymentSummary.collectedAmount,
+        collected_amount: paymentSummary.netCollectedAmount,
         source_intent: intent ?? "inline",
       },
+    });
+
+    await recordBillingTimelineEvent(invoice, "invoice.recovery_reviewed", {
+      outstanding_amount: paymentSummary.outstandingAmount,
+      collected_amount: paymentSummary.netCollectedAmount,
+      source_intent: intent ?? "inline",
     });
 
     await fetchInvoice();
@@ -457,6 +529,239 @@ export default function InvoiceDetailPage() {
       type: "success",
       title: "Recovery review logged",
       description: "This invoice now has an explicit collections review event in its timeline.",
+    });
+  }
+
+  async function handleStripeLinkSave() {
+    if (!invoice || !canManageLedger) {
+      return;
+    }
+
+    const nextStripeInvoiceId = stripeInvoiceIdInput.trim() || null;
+    const nextStripePaymentIntentId = stripePaymentIntentIdInput.trim() || null;
+
+    setSavingStripeLink(true);
+    const sb = getSupabaseBrowserClient();
+    const { error } = await sb
+      .from("invoices")
+      .update({
+        stripe_invoice_id: nextStripeInvoiceId,
+        stripe_payment_intent_id: nextStripePaymentIntentId,
+      })
+      .eq("id", invoice.id);
+
+    if (error) {
+      addToast({
+        type: "error",
+        title: "Stripe linkage failed",
+        description: error.message,
+      });
+      setSavingStripeLink(false);
+      return;
+    }
+
+    await logInvoiceActivity({
+      orgId: invoice.org_id,
+      userId: user?.id ?? null,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoice_number,
+      action: "invoice.stripe_linked",
+      metadata: {
+        ...buildInvoiceIdentifiers(invoice),
+        next_stripe_invoice_id: nextStripeInvoiceId,
+        next_stripe_payment_intent_id: nextStripePaymentIntentId,
+      },
+    });
+
+    await recordBillingTimelineEvent(invoice, "invoice.stripe_linked", {
+      next_stripe_invoice_id: nextStripeInvoiceId,
+      next_stripe_payment_intent_id: nextStripePaymentIntentId,
+    });
+
+    setSavingStripeLink(false);
+    await fetchInvoice();
+    addToast({
+      type: "success",
+      title: "Stripe linkage saved",
+      description:
+        "Invoice identifiers were stored so future Stripe events can attach more reliably.",
+    });
+  }
+
+  async function applyLedgerAdjustment(kind: "refund" | "credit" | "void") {
+    if (!invoice || !canManageLedger) {
+      return;
+    }
+
+    const sb = getSupabaseBrowserClient();
+    const nowIso = new Date().toISOString();
+    const note = adjustmentNote.trim();
+    const currentCredited = Number(invoice.credited_amount ?? 0);
+    const currentRefunded = Number(invoice.refunded_amount ?? 0);
+    const adjustment = Number(adjustmentAmount);
+    const maxRefundable = Math.max(
+      Number(invoice.amount_paid ?? 0) - currentRefunded,
+      0
+    );
+    const maxCreditable = Math.max(paymentSummary.outstandingAmount, 0);
+
+    if (kind !== "void" && (!Number.isFinite(adjustment) || adjustment <= 0)) {
+      addToast({
+        type: "error",
+        title: "Invalid adjustment amount",
+        description: "Enter a positive amount before applying this billing action.",
+      });
+      return;
+    }
+
+    if (kind === "refund" && adjustment > maxRefundable) {
+      addToast({
+        type: "error",
+        title: "Refund exceeds collected cash",
+        description: `Only ${fmt(maxRefundable)} is currently available to refund on this invoice.`,
+      });
+      return;
+    }
+
+    if (kind === "credit" && adjustment > maxCreditable) {
+      addToast({
+        type: "error",
+        title: "Credit exceeds remaining balance",
+        description: `Only ${fmt(maxCreditable)} remains open on this invoice.`,
+      });
+      return;
+    }
+
+    const nextInvoiceSnapshot: InvoiceDetailRecord =
+      kind === "refund"
+        ? {
+            ...invoice,
+            refunded_amount: currentRefunded + adjustment,
+          }
+        : kind === "credit"
+          ? {
+              ...invoice,
+              credited_amount: currentCredited + adjustment,
+            }
+          : {
+              ...invoice,
+              voided_at: nowIso,
+            };
+
+    const nextSummary = getInvoicePaymentSummary(nextInvoiceSnapshot);
+    const nextStatus =
+      kind === "void"
+        ? "cancelled"
+        : getNextLifecycleStatus(
+            invoice.status,
+            invoice.due_date,
+            nextSummary.outstandingAmount,
+            nextInvoiceSnapshot.voided_at ?? null
+          );
+
+    const updates =
+      kind === "refund"
+        ? {
+            refunded_amount: currentRefunded + adjustment,
+            status: nextStatus,
+            last_recovery_reviewed_at: nowIso,
+          }
+        : kind === "credit"
+          ? {
+              credited_amount: currentCredited + adjustment,
+              status: nextStatus,
+              paid_at: nextStatus === "paid" ? invoice.paid_at ?? nowIso : invoice.paid_at,
+              last_recovery_reviewed_at: nowIso,
+            }
+          : {
+              voided_at: nowIso,
+              status: "cancelled" as const,
+              last_recovery_reviewed_at: nowIso,
+            };
+
+    const eventAction =
+      kind === "refund"
+        ? "payment_refunded"
+        : kind === "credit"
+          ? "invoice.credited"
+          : "invoice.voided";
+    const eventStatus =
+      kind === "refund"
+        ? "refunded"
+        : kind === "credit"
+          ? "credited"
+          : "voided";
+
+    setLedgerActionLoading(kind);
+    const { error } = await sb.from("invoices").update(updates).eq("id", invoice.id);
+
+    if (error) {
+      addToast({
+        type: "error",
+        title: "Billing adjustment failed",
+        description: error.message,
+      });
+      setLedgerActionLoading(null);
+      return;
+    }
+
+    const metadata = {
+      ...buildInvoiceIdentifiers(invoice),
+      amount: kind === "void" ? paymentSummary.outstandingAmount : adjustment,
+      adjustment_note: note || null,
+      resulting_balance: nextSummary.outstandingAmount,
+      resulting_credited_amount:
+        kind === "credit" ? currentCredited + adjustment : currentCredited,
+      resulting_refunded_amount:
+        kind === "refund" ? currentRefunded + adjustment : currentRefunded,
+      next_status: nextStatus,
+      source: "invoice_detail",
+    };
+
+    await sb.from("invoice_payment_events").insert({
+      org_id: invoice.org_id,
+      invoice_id: invoice.id,
+      actor_user_id: user?.id ?? null,
+      stripe_invoice_id: stripeInvoiceIdInput.trim() || invoice.stripe_invoice_id || null,
+      stripe_payment_intent_id:
+        stripePaymentIntentIdInput.trim() || invoice.stripe_payment_intent_id || null,
+      source: "workspace",
+      event_type: eventAction,
+      status: eventStatus,
+      amount: kind === "void" ? paymentSummary.outstandingAmount : adjustment,
+      currency: invoice.currency,
+      metadata,
+    });
+
+    await logInvoiceActivity({
+      orgId: invoice.org_id,
+      userId: user?.id ?? null,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoice_number,
+      action: eventAction,
+      metadata,
+    });
+
+    await recordBillingTimelineEvent(invoice, eventAction, metadata);
+
+    setAdjustmentAmount("");
+    setAdjustmentNote("");
+    setLedgerActionLoading(null);
+    await fetchInvoice();
+    addToast({
+      type: "success",
+      title:
+        kind === "refund"
+          ? "Refund recorded"
+          : kind === "credit"
+            ? "Credit applied"
+            : "Invoice voided",
+      description:
+        kind === "refund"
+          ? `${fmt(adjustment)} was returned and the recovery ledger has been updated.`
+          : kind === "credit"
+            ? `${fmt(adjustment)} was applied against the remaining balance.`
+            : `${invoice.invoice_number} has been removed from active recovery.`,
     });
   }
 
@@ -479,9 +784,14 @@ export default function InvoiceDetailPage() {
         ? getInvoicePaymentSummary(invoice)
         : {
             collectedAmount: 0,
+            netCollectedAmount: 0,
+            creditedAmount: 0,
+            refundedAmount: 0,
+            effectiveSettledAmount: 0,
             outstandingAmount: 0,
             isSettled: false,
             isPartial: false,
+            isVoided: false,
             paymentProgress: 0,
             collectionLabel: "Awaiting collection",
             collectionTone: "default" as const,
@@ -515,10 +825,19 @@ export default function InvoiceDetailPage() {
       setPaymentAmount(String(paymentSummary.outstandingAmount));
     }
   }, [intent, invoice, paymentAmount, paymentSummary.isSettled, paymentSummary.outstandingAmount]);
+  useEffect(() => {
+    if (!invoice?.id) {
+      return;
+    }
+
+    setStripeInvoiceIdInput(invoice.stripe_invoice_id ?? "");
+    setStripePaymentIntentIdInput(invoice.stripe_payment_intent_id ?? "");
+  }, [invoice?.id, invoice?.stripe_invoice_id, invoice?.stripe_payment_intent_id]);
   const canRecordPayment =
     invoice?.status !== "draft" &&
     invoice?.status !== "cancelled" &&
     !paymentSummary.isSettled;
+  const canManageLedger = canManageBilling;
   const recoveryGuidance = paymentSummary.isSettled
     ? {
         title: "Collections complete",
@@ -769,11 +1088,27 @@ export default function InvoiceDetailPage() {
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-neutral-500">Collected</span>
+                <span className="text-neutral-500">Net collected</span>
                 <span className="text-emerald-600">
-                  {fmt(paymentSummary.collectedAmount)}
+                  {fmt(paymentSummary.netCollectedAmount)}
                 </span>
               </div>
+              {paymentSummary.refundedAmount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-neutral-500">Refunded</span>
+                  <span className="text-amber-600">
+                    {fmt(paymentSummary.refundedAmount)}
+                  </span>
+                </div>
+              )}
+              {paymentSummary.creditedAmount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-neutral-500">Credited</span>
+                  <span className="text-blue-600">
+                    {fmt(paymentSummary.creditedAmount)}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-neutral-500">Remaining</span>
                 <span className="text-neutral-900 dark:text-white">
@@ -802,7 +1137,7 @@ export default function InvoiceDetailPage() {
               <CardTitle>Payment operations</CardTitle>
             </div>
             <CardDescription>
-              Reconcile collected cash and keep the residual balance current.
+              Reconcile collected cash, apply billing adjustments, and keep webhook-linked recovery history trustworthy.
             </CardDescription>
             <div className="mt-5 flex items-center justify-between gap-3">
               <div>
@@ -831,13 +1166,27 @@ export default function InvoiceDetailPage() {
               <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">Collected</p>
                 <p className="mt-2 text-xl font-semibold text-neutral-900 dark:text-white">
-                  {fmt(paymentSummary.collectedAmount)}
+                  {fmt(paymentSummary.netCollectedAmount)}
                 </p>
               </div>
               <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">Remaining</p>
                 <p className="mt-2 text-xl font-semibold text-neutral-900 dark:text-white">
                   {fmt(paymentSummary.outstandingAmount)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">Refunded</p>
+                <p className="mt-2 text-xl font-semibold text-neutral-900 dark:text-white">
+                  {fmt(paymentSummary.refundedAmount)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">Credited</p>
+                <p className="mt-2 text-xl font-semibold text-neutral-900 dark:text-white">
+                  {fmt(paymentSummary.creditedAmount)}
                 </p>
               </div>
             </div>
@@ -883,10 +1232,10 @@ export default function InvoiceDetailPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-neutral-900 dark:text-white">
-                    Refund / credit / void groundwork
+                    Ledger adjustments
                   </p>
                   <p className="mt-1 text-sm text-neutral-500">
-                    These fields are now carried on the invoice record so future refund, credit, and void flows can enter the same history without reshaping the ledger later.
+                    Finance-capable roles can record refunds, credits, and voids here so the invoice ledger and recovery queue stay aligned.
                   </p>
                 </div>
                 <Badge variant={invoice.voided_at ? "danger" : "outline"}>
@@ -921,6 +1270,104 @@ export default function InvoiceDetailPage() {
                   </p>
                 </div>
               </div>
+              {canManageLedger && !paymentSummary.isVoided ? (
+                <div className="mt-4 space-y-3">
+                  <Input
+                    label="Adjustment amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={adjustmentAmount}
+                    onChange={(event) => setAdjustmentAmount(event.target.value)}
+                    hint={`Refundable: ${fmt(Math.max(Number(invoice.amount_paid ?? 0) - Number(invoice.refunded_amount ?? 0), 0))} · Creditable: ${fmt(paymentSummary.outstandingAmount)}`}
+                  />
+                  <Input
+                    label="Adjustment note"
+                    value={adjustmentNote}
+                    onChange={(event) => setAdjustmentNote(event.target.value)}
+                    hint="Optional context for finance audit trails and later recovery review."
+                  />
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      variant="outline"
+                      leftIcon={<CreditCard className="h-4 w-4" />}
+                      onClick={() => applyLedgerAdjustment("refund")}
+                      isLoading={ledgerActionLoading === "refund"}
+                      disabled={paymentSummary.netCollectedAmount <= 0}
+                    >
+                      Record refund
+                    </Button>
+                    <Button
+                      variant="outline"
+                      leftIcon={<Wallet className="h-4 w-4" />}
+                      onClick={() => applyLedgerAdjustment("credit")}
+                      isLoading={ledgerActionLoading === "credit"}
+                      disabled={paymentSummary.outstandingAmount <= 0}
+                    >
+                      Apply credit
+                    </Button>
+                    <Button
+                      variant="danger"
+                      onClick={() => applyLedgerAdjustment("void")}
+                      isLoading={ledgerActionLoading === "void"}
+                      disabled={invoice.status === "draft" || !!invoice.voided_at}
+                    >
+                      Void invoice
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-lg border border-dashed border-neutral-200 p-3 text-sm text-neutral-500 dark:border-neutral-800">
+                  {paymentSummary.isVoided
+                    ? "This invoice has already been voided and removed from active recovery."
+                    : "Refund, credit, and void controls stay with finance-capable roles."}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                    Stripe linkage
+                  </p>
+                  <p className="mt-1 text-sm text-neutral-500">
+                    Capture Stripe invoice and payment intent identifiers as soon as finance has them so webhook matching stops relying on weak fallback inference.
+                  </p>
+                </div>
+                <Badge variant={invoice.stripe_invoice_id || invoice.stripe_payment_intent_id ? "success" : "outline"}>
+                  {invoice.stripe_invoice_id || invoice.stripe_payment_intent_id ? "Linked" : "Awaiting link"}
+                </Badge>
+              </div>
+              {canManageLedger ? (
+                <div className="mt-4 space-y-3">
+                  <Input
+                    label="Stripe invoice ID"
+                    value={stripeInvoiceIdInput}
+                    onChange={(event) => setStripeInvoiceIdInput(event.target.value)}
+                    hint={`Billing reference: ${buildInvoiceBillingReference(invoice.org_id, invoice.id, invoice.invoice_number)}`}
+                  />
+                  <Input
+                    label="Stripe payment intent ID"
+                    value={stripePaymentIntentIdInput}
+                    onChange={(event) => setStripePaymentIntentIdInput(event.target.value)}
+                    hint="Add this once Stripe has created a payment attempt so webhook events can attach directly."
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleStripeLinkSave}
+                    isLoading={savingStripeLink}
+                  >
+                    Save Stripe linkage
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-lg border border-dashed border-neutral-200 p-3 text-sm text-neutral-500 dark:border-neutral-800">
+                  {isVendorRole(role)
+                    ? "Vendor seats can monitor linked status but cannot change Stripe identifiers."
+                    : "Your role can review linkage status here while finance keeps Stripe identifiers current."}
+                </div>
+              )}
             </div>
           </Card>
 
@@ -988,7 +1435,7 @@ export default function InvoiceDetailPage() {
               <div className="flex items-center justify-between rounded-xl border border-neutral-200 px-3 py-2 dark:border-neutral-800">
                 <span>Outstanding balance</span>
                 <span className="font-medium text-neutral-900 dark:text-white">
-                  {fmt(Number(invoice.total) - Number(invoice.amount_paid ?? 0))}
+                  {fmt(paymentSummary.outstandingAmount)}
                 </span>
               </div>
               <div className="flex items-center justify-between rounded-xl border border-neutral-200 px-3 py-2 dark:border-neutral-800">
@@ -1077,7 +1524,9 @@ export default function InvoiceDetailPage() {
                     ? "Use the Stripe portal for payment method issues, invoice recovery, and customer billing updates."
                     : canUpdateInvoices
                       ? "Use manual reconciliation above to keep the invoice balance and audit trail current."
-                      : "You have read-only access here. Review the timeline and escalate to a manager or admin when action is needed."}
+                      : role === "viewer"
+                        ? "You have read-only oversight access here. Review the timeline and escalate to a finance manager, admin, or owner when action is needed."
+                        : "You have read-only access here. Review the timeline and escalate to a manager or admin when action is needed."}
                 </p>
                 <div className="mt-4 flex flex-wrap gap-3">
                   {canManageBilling && currentOrg?.stripe_customer_id && (

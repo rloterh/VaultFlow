@@ -116,7 +116,18 @@ type BillingFetchState = {
   invoiceCount: number;
   memberCount: number;
   invoices: Array<
-    Pick<Invoice, "id" | "invoice_number" | "status" | "total" | "amount_paid" | "due_date"> & {
+    Pick<
+      Invoice,
+      | "id"
+      | "invoice_number"
+      | "status"
+      | "total"
+      | "amount_paid"
+      | "due_date"
+      | "credited_amount"
+      | "refunded_amount"
+      | "voided_at"
+    > & {
       client?: { name?: string | null };
     }
   >;
@@ -157,7 +168,7 @@ function BillingContent() {
       const [invoiceRes, memberRes, eventRes] = await Promise.all([
         sb
           .from("invoices")
-          .select("id, invoice_number, status, total, amount_paid, due_date, client:clients(name)")
+          .select("id, invoice_number, status, total, amount_paid, due_date, credited_amount, refunded_amount, voided_at, client:clients(name)")
           .eq("org_id", currentOrg.id),
         sb
           .from("org_memberships")
@@ -190,7 +201,18 @@ function BillingContent() {
       }
 
       const invoices = (invoiceRes.data ?? []) as Array<
-        Pick<Invoice, "id" | "invoice_number" | "status" | "total" | "amount_paid" | "due_date"> & {
+        Pick<
+          Invoice,
+          | "id"
+          | "invoice_number"
+          | "status"
+          | "total"
+          | "amount_paid"
+          | "due_date"
+          | "credited_amount"
+          | "refunded_amount"
+          | "voided_at"
+        > & {
           client?: { name?: string | null };
         }
       >;

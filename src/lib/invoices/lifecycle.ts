@@ -1,5 +1,6 @@
 import type { Invoice, InvoiceStatus } from "@/types/database";
 import { recordActivity } from "@/lib/activity/log";
+import { buildInvoiceBillingReference } from "@/lib/invoices/reference";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type TransitionableInvoice = Omit<Invoice, "client"> & {
@@ -170,7 +171,14 @@ export async function transitionInvoiceStatus(
     entityId: invoice.id,
     action: activityActionByStatus[nextStatus],
     metadata: {
+      billing_reference: buildInvoiceBillingReference(
+        invoice.org_id,
+        invoice.id,
+        invoice.invoice_number
+      ),
+      invoice_id: invoice.id,
       invoice_number: invoice.invoice_number,
+      org_id: invoice.org_id,
       client_name: invoice.client?.name ?? null,
       previous_status: invoice.status,
       next_status: nextStatus,

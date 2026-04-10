@@ -52,8 +52,11 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
   return entries.map((entry) => {
     const metadata = entry.metadata as {
       amount?: number;
+      adjustment_note?: string;
       invoice_number?: string;
       resulting_balance?: number;
+      resulting_credited_amount?: number;
+      resulting_refunded_amount?: number;
       status?: string;
       stripe_invoice_number?: string;
     };
@@ -134,7 +137,7 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
           title: "Payment refunded",
           tone: "warning",
           detail: metadata.amount
-            ? `${fmt(Number(metadata.amount))} was refunded back to the customer.`
+            ? `${fmt(Number(metadata.amount))} was refunded back to the customer.${typeof metadata.resulting_balance === "number" ? ` ${fmt(Number(metadata.resulting_balance))} remains open.` : ""}${typeof metadata.adjustment_note === "string" && metadata.adjustment_note.trim().length > 0 ? ` Note: ${metadata.adjustment_note}` : ""}`
             : "A payment refund was recorded for this invoice.",
           createdAt: entry.created_at,
           actorName,
@@ -145,7 +148,7 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
           title: "Credit applied",
           tone: "info",
           detail: metadata.amount
-            ? `${fmt(Number(metadata.amount))} was reserved as credit against this invoice.`
+            ? `${fmt(Number(metadata.amount))} was reserved as credit against this invoice.${typeof metadata.resulting_balance === "number" ? ` ${fmt(Number(metadata.resulting_balance))} remains open.` : ""}${typeof metadata.adjustment_note === "string" && metadata.adjustment_note.trim().length > 0 ? ` Note: ${metadata.adjustment_note}` : ""}`
             : "A credit adjustment was recorded for this invoice.",
           createdAt: entry.created_at,
           actorName,
@@ -155,7 +158,20 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
           id: entry.id,
           title: "Invoice voided",
           tone: "danger",
-          detail: "This invoice was voided as part of a later-stage billing lifecycle adjustment.",
+          detail:
+            typeof metadata.adjustment_note === "string" &&
+            metadata.adjustment_note.trim().length > 0
+              ? `This invoice was voided as part of a later-stage billing lifecycle adjustment. Note: ${metadata.adjustment_note}`
+              : "This invoice was voided as part of a later-stage billing lifecycle adjustment.",
+          createdAt: entry.created_at,
+          actorName,
+        };
+      case "invoice.stripe_linked":
+        return {
+          id: entry.id,
+          title: "Stripe identifiers linked",
+          tone: "info",
+          detail: "Stripe invoice or payment intent identifiers were stored so future webhook billing events can attach directly to this invoice.",
           createdAt: entry.created_at,
           actorName,
         };

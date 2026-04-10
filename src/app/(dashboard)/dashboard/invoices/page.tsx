@@ -22,6 +22,7 @@ import {
   formatQueuePriority,
   type ReminderActivityLike,
 } from "@/lib/collections/queue";
+import { buildInvoiceBillingReference } from "@/lib/invoices/reference";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import {
   fetchVendorAssignedClientIds,
@@ -298,7 +299,14 @@ export default function InvoicesPage() {
         entityId: data.id,
         action: "invoice.created",
         metadata: {
+          billing_reference: buildInvoiceBillingReference(
+            currentOrg.id,
+            data.id,
+            draftForm.invoice_number
+          ),
+          invoice_id: data.id,
           invoice_number: draftForm.invoice_number,
+          org_id: currentOrg.id,
           client_name: selectedClient?.name ?? null,
           total,
         },

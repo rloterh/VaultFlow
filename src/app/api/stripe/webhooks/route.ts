@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import Stripe from "stripe";
 import { getStripeClient, priceIdToPlan } from "@/lib/stripe/client";
 import { createClient } from "@supabase/supabase-js";
+import { buildInvoiceBillingReference } from "@/lib/invoices/reference";
 import {
   getStripeWebhookSecret,
   getSupabaseConfig,
@@ -333,6 +334,13 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
     stripe_invoice_number: invoice.number,
     linked_invoice_id: linkedInvoice?.id ?? null,
     linked_invoice_number: linkedInvoice?.invoice_number ?? null,
+    billing_reference: linkedInvoice
+      ? buildInvoiceBillingReference(
+          linkedInvoice.org_id,
+          linkedInvoice.id,
+          linkedInvoice.invoice_number
+        )
+      : null,
   };
 
   if (linkedInvoice) {
@@ -391,6 +399,13 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
     stripe_invoice_number: invoice.number,
     linked_invoice_id: linkedInvoice?.id ?? null,
     linked_invoice_number: linkedInvoice?.invoice_number ?? null,
+    billing_reference: linkedInvoice
+      ? buildInvoiceBillingReference(
+          linkedInvoice.org_id,
+          linkedInvoice.id,
+          linkedInvoice.invoice_number
+        )
+      : null,
   };
 
   if (linkedInvoice) {

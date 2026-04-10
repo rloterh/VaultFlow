@@ -40,6 +40,7 @@ const activityConfig: Record<
   "invoice.recovery_reviewed": { label: "Reviewed recovery", icon: AlertTriangle, tone: "warning" },
   "invoice.credited": { label: "Applied credit", icon: CreditCard, tone: "info" },
   "invoice.voided": { label: "Voided invoice", icon: XCircle, tone: "danger" },
+  "invoice.stripe_linked": { label: "Linked Stripe identifiers", icon: CreditCard, tone: "info" },
   "client.created": { label: "Added client", icon: Users },
   "client.updated": { label: "Updated client", icon: Edit },
   "client.archived": { label: "Archived client", icon: Trash2, tone: "danger" },
