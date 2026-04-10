@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
+  BellRing,
   Building2,
   Calendar,
   DollarSign,
@@ -24,6 +25,16 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
 import { recordActivity } from "@/lib/activity/log";
+import {
+  buildCollectionsQueue,
+  formatLatestReminderStatus,
+  formatQueuePriority,
+  type ReminderActivityLike,
+} from "@/lib/collections/queue";
+import {
+  canRecordReminder,
+  recordInvoiceReminder,
+} from "@/lib/invoices/follow-up";
 import {
   getActivityLabel,
   getActivitySubject,
@@ -75,66 +86,83 @@ export default function ClientDetailPage() {
   const [client, setClient] = useState<Client | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [activity, setActivity] = useState<ClientActivityEntry[]>([]);
+  const [reminders, setReminders] = useState<ReminderActivityLike[]>([]);
   const [loading, setLoading] = useState(true);
   const [archiving, setArchiving] = useState(false);
+  const [recordingReminderId, setRecordingReminderId] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchClient() {
-      const sb = getSupabaseBrowserClient();
-      const [clientRes, invoiceRes] = await Promise.all([
-        sb.from("clients").select("*").eq("id", id).single(),
-        sb
-          .from("invoices")
-          .select("*")
-          .eq("client_id", id)
-          .order("issue_date", { ascending: false }),
-      ]);
+  const fetchClient = useCallback(async () => {
+    const sb = getSupabaseBrowserClient();
+    const [clientRes, invoiceRes] = await Promise.all([
+      sb.from("clients").select("*").eq("id", id).single(),
+      sb
+        .from("invoices")
+        .select("*")
+        .eq("client_id", id)
+        .order("issue_date", { ascending: false }),
+    ]);
 
-      const nextClient = (clientRes.data as Client | null) ?? null;
-      const nextInvoices = (invoiceRes.data ?? []) as Invoice[];
-      const invoiceIds = nextInvoices.map((invoice) => invoice.id);
+    const nextClient = (clientRes.data as Client | null) ?? null;
+    const nextInvoices = (invoiceRes.data ?? []) as Invoice[];
+    const invoiceIds = nextInvoices.map((invoice) => invoice.id);
 
-      const activityRequests = [
+    const activityRequests = [
+      sb
+        .from("activity_log")
+        .select("*, profile:profiles(full_name, avatar_url)")
+        .eq("entity_type", "client")
+        .eq("entity_id", id)
+        .order("created_at", { ascending: false })
+        .limit(6),
+    ];
+    const reminderRequest =
+      invoiceIds.length > 0
+        ? sb
+            .from("activity_log")
+            .select("entity_id, created_at, metadata")
+            .eq("entity_type", "invoice")
+            .eq("action", "invoice.reminder_sent")
+            .in("entity_id", invoiceIds)
+            .order("created_at", { ascending: false })
+            .limit(100)
+        : Promise.resolve({ data: [] as ReminderActivityLike[] });
+
+    if (invoiceIds.length > 0) {
+      activityRequests.push(
         sb
           .from("activity_log")
           .select("*, profile:profiles(full_name, avatar_url)")
-          .eq("entity_type", "client")
-          .eq("entity_id", id)
+          .eq("entity_type", "invoice")
+          .in("entity_id", invoiceIds)
           .order("created_at", { ascending: false })
-          .limit(6),
-      ];
-
-      if (invoiceIds.length > 0) {
-        activityRequests.push(
-          sb
-            .from("activity_log")
-            .select("*, profile:profiles(full_name, avatar_url)")
-            .eq("entity_type", "invoice")
-            .in("entity_id", invoiceIds)
-            .order("created_at", { ascending: false })
-            .limit(10)
-        );
-      }
-
-      const activityResponses = await Promise.all(activityRequests);
-      const mergedActivity = activityResponses
-        .flatMap((response) => response.data ?? [])
-        .sort(
-          (left, right) =>
-            new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
-        )
-        .slice(0, 8) as ClientActivityEntry[];
-
-      setClient(nextClient);
-      setInvoices(nextInvoices);
-      setActivity(mergedActivity);
-      setLoading(false);
+          .limit(10)
+      );
     }
 
+    const [activityResponses, reminderResponse] = await Promise.all([
+      Promise.all(activityRequests),
+      reminderRequest,
+    ]);
+    const mergedActivity = activityResponses
+      .flatMap((response) => response.data ?? [])
+      .sort(
+        (left, right) =>
+          new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+      )
+      .slice(0, 8) as ClientActivityEntry[];
+
+    setClient(nextClient);
+    setInvoices(nextInvoices);
+    setActivity(mergedActivity);
+    setReminders((reminderResponse.data ?? []) as ReminderActivityLike[]);
+    setLoading(false);
+  }, [id]);
+
+  useEffect(() => {
     if (id) {
       void fetchClient();
     }
-  }, [id]);
+  }, [fetchClient, id]);
 
   async function archiveClient() {
     if (!client || !can("clients:delete")) {
@@ -178,7 +206,34 @@ export default function ClientDetailPage() {
     window.location.href = "/dashboard/clients";
   }
 
+  async function handleRecordReminder(invoice: Invoice) {
+    setRecordingReminderId(invoice.id);
+    const success = await recordInvoiceReminder(invoice, user?.id);
+
+    if (!success) {
+      addToast({
+        type: "error",
+        title: "Reminder could not be recorded",
+        description: "Try again after the activity log reconnects.",
+      });
+      setRecordingReminderId(null);
+      return;
+    }
+
+    await fetchClient();
+    addToast({
+      type: "success",
+      title: "Reminder recorded",
+      description: `A follow-up touchpoint was logged for ${invoice.invoice_number}.`,
+    });
+    setRecordingReminderId(null);
+  }
+
   const summary = useMemo(() => buildClientFinancialSnapshot(invoices), [invoices]);
+  const collectionsQueue = useMemo(
+    () => buildCollectionsQueue(invoices, reminders),
+    [invoices, reminders]
+  );
 
   if (loading) {
     return (
@@ -401,6 +456,81 @@ export default function ClientDetailPage() {
                   {fmtDate(summary.lastInvoiceDate)}
                 </span>
               </div>
+            </div>
+          </Card>
+
+          <Card>
+            <CardTitle>Collections queue</CardTitle>
+            <CardDescription>
+              Invoice follow-up history and the next actions for this account.
+            </CardDescription>
+            <div className="mt-4 space-y-3">
+              {collectionsQueue.length === 0 ? (
+                <p className="text-sm text-neutral-500">
+                  No open collections work is active for this client.
+                </p>
+              ) : (
+                collectionsQueue.map((item) => (
+                  <div
+                    key={item.invoice.id}
+                    className="rounded-xl border border-neutral-200 p-3 dark:border-neutral-800"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                          {item.invoice.invoice_number}
+                        </p>
+                        <p className="mt-1 text-xs text-neutral-500">
+                          {formatLatestReminderStatus(item)}
+                          {item.latestReminderAt ? ` · ${timeAgo(item.latestReminderAt)}` : ""}
+                        </p>
+                      </div>
+                      <Badge
+                        variant={
+                          item.priority === "critical"
+                            ? "danger"
+                            : item.priority === "high"
+                              ? "warning"
+                              : "outline"
+                        }
+                      >
+                        {formatQueuePriority(item.priority)}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between text-sm">
+                      <span className="text-neutral-500">
+                        {item.daysUntilDue < 0
+                          ? `${Math.abs(item.daysUntilDue)}d overdue`
+                          : item.daysUntilDue === 0
+                            ? "Due today"
+                            : `Due in ${item.daysUntilDue}d`}
+                      </span>
+                      <span className="font-medium text-neutral-900 dark:text-white">
+                        {fmt(item.outstandingAmount)}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                      <Link
+                        href={`/dashboard/invoices/${item.invoice.id}`}
+                        className="text-xs font-medium text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
+                      >
+                        Open invoice
+                      </Link>
+                      {can("invoices:update") && canRecordReminder(item.invoice) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          isLoading={recordingReminderId === item.invoice.id}
+                          leftIcon={<BellRing className="h-4 w-4" />}
+                          onClick={() => handleRecordReminder(item.invoice)}
+                        >
+                          Record reminder
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </Card>
 

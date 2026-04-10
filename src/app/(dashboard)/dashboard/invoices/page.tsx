@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { FileText, Plus, Sparkles } from "lucide-react";
+import { BellRing, FileText, Plus, Sparkles } from "lucide-react";
 import { InvoiceRowActions } from "@/components/dashboard/invoice-row-actions";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
@@ -15,6 +16,12 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
 import { recordActivity } from "@/lib/activity/log";
+import {
+  buildCollectionsQueue,
+  formatLatestReminderStatus,
+  formatQueuePriority,
+  type ReminderActivityLike,
+} from "@/lib/collections/queue";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
@@ -60,9 +67,11 @@ export default function InvoicesPage() {
   const addToast = useUIStore((s) => s.addToast);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [reminders, setReminders] = useState<ReminderActivityLike[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<InvoiceStatus | "all">("all");
+  const [workflow, setWorkflow] = useState<"all" | "collections" | "needs-touch">("all");
   const [search, setSearch] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
   const [draftForm, setDraftForm] = useState({
@@ -98,7 +107,7 @@ export default function InvoicesPage() {
       query = query.ilike("invoice_number", `%${search}%`);
     }
 
-    const [invoiceRes, clientRes] = await Promise.all([
+    const [invoiceRes, clientRes, reminderRes] = await Promise.all([
       query,
       sb
         .from("clients")
@@ -106,6 +115,14 @@ export default function InvoicesPage() {
         .eq("org_id", currentOrg.id)
         .eq("is_active", true)
         .order("name"),
+      sb
+        .from("activity_log")
+        .select("entity_id, created_at, metadata")
+        .eq("org_id", currentOrg.id)
+        .eq("entity_type", "invoice")
+        .eq("action", "invoice.reminder_sent")
+        .order("created_at", { ascending: false })
+        .limit(200),
     ]);
 
     const nextInvoices = (invoiceRes.data ?? []) as Invoice[];
@@ -113,6 +130,7 @@ export default function InvoicesPage() {
 
     setInvoices(nextInvoices);
     setClients(nextClients);
+    setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
     setDraftForm((current) => ({
       ...current,
       client_id: current.client_id || nextClients[0]?.id || "",
@@ -233,16 +251,38 @@ export default function InvoicesPage() {
   }
 
   const metrics = useMemo(() => {
-    const paid = invoices.filter((invoice) => invoice.status === "paid");
+    const collectionsQueue = buildCollectionsQueue(invoices, reminders);
     return {
       total: invoices.length,
       draft: invoices.filter((invoice) => invoice.status === "draft").length,
-      outstanding: invoices
-        .filter((invoice) => ["sent", "viewed", "overdue"].includes(invoice.status))
-        .reduce((sum, invoice) => sum + Number(invoice.total), 0),
-      paid: paid.reduce((sum, invoice) => sum + Number(invoice.total), 0),
+      needsTouch: collectionsQueue.filter((item) => item.priority !== "monitor").length,
+      remindersLogged: collectionsQueue.filter((item) => item.reminderCount > 0).length,
     };
-  }, [invoices]);
+  }, [invoices, reminders]);
+
+  const collectionsQueue = useMemo(
+    () => buildCollectionsQueue(invoices, reminders),
+    [invoices, reminders]
+  );
+
+  const filteredInvoices = useMemo(() => {
+    if (workflow === "all") {
+      return invoices;
+    }
+
+    const queueInvoiceIds = new Set(
+      collectionsQueue
+        .filter((item) => workflow === "collections" || item.priority !== "monitor")
+        .map((item) => item.invoice.id)
+    );
+
+    return invoices.filter((invoice) => queueInvoiceIds.has(invoice.id));
+  }, [collectionsQueue, invoices, workflow]);
+
+  const queueByInvoiceId = useMemo(
+    () => new Map(collectionsQueue.map((item) => [item.invoice.id, item])),
+    [collectionsQueue]
+  );
 
   const columns: Column<Invoice>[] = [
     {
@@ -268,7 +308,9 @@ export default function InvoicesPage() {
             {(row.client as Client | undefined)?.name ?? "-"}
           </p>
           <p className="text-xs text-neutral-500">
-            {(row.client as Client | undefined)?.company ?? ""}
+            {queueByInvoiceId.get(row.id)?.latestReminderAt
+              ? `${formatLatestReminderStatus(queueByInvoiceId.get(row.id)!)}`
+              : (row.client as Client | undefined)?.company ?? ""}
           </p>
         </div>
       ),
@@ -277,8 +319,20 @@ export default function InvoicesPage() {
       key: "status",
       header: "Status",
       sortable: true,
-      width: "120px",
-      render: (row) => <StatusBadge status={row.status} />,
+      width: "180px",
+      render: (row) => {
+        const queueItem = queueByInvoiceId.get(row.id);
+        return (
+          <div className="space-y-1">
+            <StatusBadge status={row.status} />
+            {queueItem && (
+              <p className="text-xs text-neutral-500">
+                {formatQueuePriority(queueItem.priority)}
+              </p>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: "issue_date",
@@ -299,16 +353,28 @@ export default function InvoicesPage() {
       render: (row) => {
         const overdue =
           new Date(row.due_date) < new Date() && row.status !== "paid";
+        const queueItem = queueByInvoiceId.get(row.id);
         return (
-          <span
-            className={
-              overdue
-                ? "font-medium text-red-600 dark:text-red-400"
-                : "text-neutral-600 dark:text-neutral-400"
-            }
-          >
-            {fmtDate(row.due_date)}
-          </span>
+          <div>
+            <span
+              className={
+                overdue
+                  ? "font-medium text-red-600 dark:text-red-400"
+                  : "text-neutral-600 dark:text-neutral-400"
+              }
+            >
+              {fmtDate(row.due_date)}
+            </span>
+            {queueItem && (
+              <p className="text-xs text-neutral-400">
+                {queueItem.daysUntilDue < 0
+                  ? `${Math.abs(queueItem.daysUntilDue)}d overdue`
+                  : queueItem.daysUntilDue === 0
+                    ? "Due today"
+                    : `Due in ${queueItem.daysUntilDue}d`}
+              </p>
+            )}
+          </div>
         );
       },
     },
@@ -382,27 +448,84 @@ export default function InvoicesPage() {
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
-            Outstanding
+            Needs touch
           </p>
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
-            {fmt(metrics.outstanding)}
+            {metrics.needsTouch}
           </p>
           <p className="mt-1 text-sm text-neutral-500">
-            Open exposure still in collections motion.
+            Collection items that should be worked next.
           </p>
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
-            Realized
+            Reminded
           </p>
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
-            {fmt(metrics.paid)}
+            {metrics.remindersLogged}
           </p>
           <p className="mt-1 text-sm text-neutral-500">
-            Closed revenue already converted to cash.
+            Open invoices with at least one follow-up logged.
           </p>
         </Card>
       </div>
+
+      {collectionsQueue.length > 0 && (
+        <Card>
+          <CardTitle>Collections queue</CardTitle>
+          <CardDescription>
+            Prioritized receivables work based on due dates and reminder history.
+          </CardDescription>
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            {collectionsQueue.slice(0, 3).map((item) => (
+              <Link
+                key={item.invoice.id}
+                href={`/dashboard/invoices/${item.invoice.id}`}
+                className="rounded-xl border border-neutral-200/70 p-4 transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                    {item.invoice.invoice_number}
+                  </p>
+                  <Badge
+                    variant={
+                      item.priority === "critical"
+                        ? "danger"
+                        : item.priority === "high"
+                          ? "warning"
+                          : "outline"
+                    }
+                  >
+                    {formatQueuePriority(item.priority)}
+                  </Badge>
+                </div>
+                <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                  {item.clientName}
+                </p>
+                <div className="mt-3 flex items-center justify-between text-sm">
+                  <span className="text-neutral-400">Outstanding</span>
+                  <span className="font-medium text-neutral-900 dark:text-white">
+                    {fmt(item.outstandingAmount)}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center justify-between text-xs text-neutral-400">
+                  <span>
+                    {item.daysUntilDue < 0
+                      ? `${Math.abs(item.daysUntilDue)}d overdue`
+                      : item.daysUntilDue === 0
+                        ? "Due today"
+                        : `Due in ${item.daysUntilDue}d`}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <BellRing className="h-3.5 w-3.5" />
+                    {formatLatestReminderStatus(item)}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {composerOpen && canCreateInvoices && (
         <Card>
@@ -531,7 +654,7 @@ export default function InvoicesPage() {
       )}
 
       <DataTable
-        data={invoices}
+        data={filteredInvoices}
         columns={columns}
         searchPlaceholder="Search invoices..."
         searchKey="invoice_number"
@@ -548,24 +671,46 @@ export default function InvoicesPage() {
           />
         }
         toolbar={
-          <div className="flex items-center gap-1">
-            {statuses.map((entry) => (
-              <button
-                key={entry.value}
-                type="button"
-                onClick={() => {
-                  setStatus(entry.value);
-                  setLoading(true);
-                }}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  status === entry.value
-                    ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
-                    : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                }`}
-              >
-                {entry.label}
-              </button>
-            ))}
+          <div className="flex flex-col gap-2 lg:items-end">
+            <div className="flex items-center gap-1">
+              {statuses.map((entry) => (
+                <button
+                  key={entry.value}
+                  type="button"
+                  onClick={() => {
+                    setStatus(entry.value);
+                    setLoading(true);
+                  }}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    status === entry.value
+                      ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
+                      : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  }`}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1">
+              {[
+                { label: "All workflow", value: "all" as const },
+                { label: "Collections", value: "collections" as const },
+                { label: "Needs touch", value: "needs-touch" as const },
+              ].map((entry) => (
+                <button
+                  key={entry.value}
+                  type="button"
+                  onClick={() => setWorkflow(entry.value)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    workflow === entry.value
+                      ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
+                      : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  }`}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
           </div>
         }
       />
