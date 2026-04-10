@@ -45,6 +45,14 @@ export interface Invoice {
   discount_amount: number;
   total: number;
   amount_paid: number;
+  stripe_invoice_id?: string | null;
+  stripe_payment_intent_id?: string | null;
+  last_payment_failed_at?: string | null;
+  last_payment_received_at?: string | null;
+  last_recovery_reviewed_at?: string | null;
+  credited_amount?: number;
+  refunded_amount?: number;
+  voided_at?: string | null;
   issue_date: string;
   due_date: string;
   paid_at: string | null;
@@ -91,6 +99,29 @@ export interface VendorClientAssignment {
   created_at: string;
   client?: Pick<Client, "id" | "name" | "company"> | null;
   membership?: Pick<OrgMembership, "id" | "user_id" | "role"> | null;
+}
+
+export interface InvoicePaymentEvent {
+  id: string;
+  org_id: string;
+  invoice_id: string | null;
+  actor_user_id: string | null;
+  stripe_invoice_id: string | null;
+  stripe_payment_intent_id: string | null;
+  source: string;
+  event_type: string;
+  status:
+    | "pending"
+    | "succeeded"
+    | "failed"
+    | "reviewed"
+    | "refunded"
+    | "credited"
+    | "voided";
+  amount: number;
+  currency: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
 }
 
 // ============================================

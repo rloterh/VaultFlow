@@ -51,6 +51,7 @@ import {
   getReminderRecommendation,
   recordInvoiceReminder,
 } from "@/lib/invoices/follow-up";
+import { buildInvoiceIntentHref } from "@/lib/invoices/history";
 import {
   buildReportSnapshot,
   formatInvoiceStatus,
@@ -64,6 +65,12 @@ import {
   getClientOpsViewForQueuePreset,
 } from "@/lib/operations/client-views";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
+import {
+  fetchVendorAssignedClientIds,
+  filterClientsByAssignment,
+  filterInvoicesByAssignment,
+  isVendorRole,
+} from "@/lib/rbac/vendor-access";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { useOrgStore } from "@/stores/org-store";
@@ -219,18 +226,39 @@ function ReportsContent() {
     setLoading(true);
     setError(null);
     const supabase = getSupabaseBrowserClient();
+    const assignedClientIds = isVendorRole(role)
+      ? await fetchVendorAssignedClientIds(supabase, currentOrg.id, user?.id)
+      : [];
+
+    if (isVendorRole(role) && assignedClientIds.length === 0) {
+      setInvoices([]);
+      setClients([]);
+      setReminders([]);
+      setWorkflowActivity([]);
+      setLoading(false);
+      return;
+    }
+
+    let invoiceQuery = supabase
+      .from("invoices")
+      .select("*, client:clients(id, name, company)")
+      .eq("org_id", currentOrg.id)
+      .order("created_at", { ascending: false });
+    let clientQuery = supabase
+      .from("clients")
+      .select("*")
+      .eq("org_id", currentOrg.id)
+      .eq("is_active", true)
+      .order("created_at", { ascending: false });
+
+    if (isVendorRole(role) && assignedClientIds.length > 0) {
+      invoiceQuery = invoiceQuery.in("client_id", assignedClientIds);
+      clientQuery = clientQuery.in("id", assignedClientIds);
+    }
+
     const [invoiceResponse, clientResponse, reminderResponse, activityResponse] = await Promise.all([
-      supabase
-        .from("invoices")
-        .select("*, client:clients(id, name, company)")
-        .eq("org_id", currentOrg.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("clients")
-        .select("*")
-        .eq("org_id", currentOrg.id)
-        .eq("is_active", true)
-        .order("created_at", { ascending: false }),
+      invoiceQuery,
+      clientQuery,
       supabase
         .from("activity_log")
         .select("id, action, entity_id, created_at, metadata, profile:profiles(full_name)")
@@ -265,12 +293,25 @@ function ReportsContent() {
       return;
     }
 
-    setInvoices((invoiceResponse.data ?? []) as Invoice[]);
-    setClients((clientResponse.data ?? []) as Client[]);
+    const scopedInvoices = isVendorRole(role)
+      ? filterInvoicesByAssignment(
+          (invoiceResponse.data ?? []) as Invoice[],
+          assignedClientIds
+        )
+      : ((invoiceResponse.data ?? []) as Invoice[]);
+    const scopedClients = isVendorRole(role)
+      ? filterClientsByAssignment(
+          (clientResponse.data ?? []) as Client[],
+          assignedClientIds
+        )
+      : ((clientResponse.data ?? []) as Client[]);
+
+    setInvoices(scopedInvoices);
+    setClients(scopedClients);
     setReminders((reminderResponse.data ?? []) as ReminderActivityEntry[]);
     setWorkflowActivity((activityResponse.data ?? []) as InvoiceWorkflowActivityEntry[]);
     setLoading(false);
-  }, [addToast, currentOrg]);
+  }, [addToast, currentOrg, role, user?.id]);
 
   useEffect(() => {
     fetchReports();
@@ -378,6 +419,11 @@ function ReportsContent() {
     getClientOpsViewForQueuePreset(queuePreset)
   );
   const accountabilityByInvoiceId = buildWorkflowAccountabilityMap(workflowActivity);
+  const queueIntent = can("org:billing")
+    ? "recovery"
+    : can("invoices:update")
+      ? "record-payment"
+      : "history";
 
   reminders.forEach((entry) => {
     if (!reminderLookup.has(entry.entity_id)) {
@@ -398,11 +444,24 @@ function ReportsContent() {
             Reports
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            A live operational view of collections, invoice throughput, and
-            account exposure across your workspace.
+            {role === "finance_manager"
+              ? "A finance-ready view of collections pressure, recovery posture, and invoice throughput across the workspace."
+              : role === "viewer"
+                ? "A read-only oversight view of collections, invoice throughput, and account exposure across the workspace."
+                : isVendorRole(role)
+                  ? "A scoped reporting view of only the clients and invoices assigned to your vendor seat."
+                  : "A live operational view of collections, invoice throughput, and account exposure across your workspace."}
           </p>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          {can("org:billing") && (
+            <Link
+              href="/settings/billing"
+              className="inline-flex h-10 items-center rounded-lg border border-neutral-200 px-3 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-900"
+            >
+              Open billing workspace
+            </Link>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5 text-sm text-neutral-500">
               <span className="flex items-center gap-2 font-medium text-neutral-600 dark:text-neutral-300">
@@ -715,13 +774,17 @@ function ReportsContent() {
                               Record reminder
                             </Button>
                           )}
-                          <Link href={`/dashboard/invoices/${item.invoice.id}`}>
+                          <Link href={buildInvoiceIntentHref(item.invoice.id, queueIntent)}>
                             <Button
                               size="sm"
                               variant="ghost"
                               rightIcon={<ArrowUpRight className="h-3.5 w-3.5" />}
                             >
-                              View invoice
+                              {can("org:billing")
+                                ? "Open recovery"
+                                : can("invoices:update")
+                                  ? "Open reconciliation"
+                                  : "View history"}
                             </Button>
                           </Link>
                         </div>

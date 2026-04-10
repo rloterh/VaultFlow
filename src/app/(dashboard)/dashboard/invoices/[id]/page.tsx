@@ -60,7 +60,7 @@ import {
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import type { Client, Invoice, InvoiceItem } from "@/types/database";
+import type { Client, Invoice, InvoiceItem, InvoicePaymentEvent } from "@/types/database";
 
 interface InvoiceActivityEntry {
   id: string;
@@ -76,6 +76,17 @@ type InvoiceDetailRecord = Omit<Invoice, "client"> & {
   client?: Client | null;
   items?: InvoiceItem[];
 };
+
+const LEDGER_EVENT_ACTIONS = new Set([
+  "payment_recorded",
+  "payment_received",
+  "payment_failed",
+  "payment_refunded",
+  "invoice.credited",
+  "invoice.voided",
+  "invoice.recovery_reviewed",
+  "invoice.payment_recorded",
+]);
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", {
@@ -158,12 +169,23 @@ export default function InvoiceDetailPage() {
       return;
     }
 
-    const activityRes = await sb
-      .from("activity_log")
-      .select("id, action, entity_type, entity_id, metadata, created_at, profile:profiles(full_name, avatar_url, email)")
-      .eq("org_id", nextInvoice.org_id)
-      .order("created_at", { ascending: false })
-      .limit(60);
+    const [activityRes, paymentEventRes] = await Promise.all([
+      sb
+        .from("activity_log")
+        .select("id, action, entity_type, entity_id, metadata, created_at, profile:profiles(full_name, avatar_url, email)")
+        .eq("org_id", nextInvoice.org_id)
+        .order("created_at", { ascending: false })
+        .limit(60),
+      sb
+        .from("invoice_payment_events")
+        .select(
+          "id, invoice_id, event_type, amount, currency, metadata, created_at, actor_user_id, actor:profiles(full_name, avatar_url, email)"
+        )
+        .eq("org_id", nextInvoice.org_id)
+        .eq("invoice_id", nextInvoice.id)
+        .order("created_at", { ascending: false })
+        .limit(40),
+    ]);
 
     const filteredActivity = filterInvoiceHistoryEntries(
       (activityRes.data ?? []).map((entry) => ({
@@ -174,10 +196,44 @@ export default function InvoiceDetailPage() {
       })),
       nextInvoice.id,
       nextInvoice.invoice_number
-    ) as InvoiceActivityEntry[];
+    ).filter((entry) => !LEDGER_EVENT_ACTIONS.has(entry.action)) as InvoiceActivityEntry[];
+
+    const paymentHistory = ((paymentEventRes.data ?? []) as Array<
+      Pick<
+        InvoicePaymentEvent,
+        "id" | "invoice_id" | "event_type" | "amount" | "currency" | "metadata" | "created_at"
+      > & {
+        actor?: {
+          full_name?: string | null;
+          avatar_url?: string | null;
+          email?: string | null;
+        } | null;
+      }
+    >).map((entry) => ({
+      id: entry.id,
+      action: entry.event_type,
+      entity_type: "invoice",
+      entity_id: entry.invoice_id ?? nextInvoice.id,
+      metadata: {
+        invoice_id: nextInvoice.id,
+        invoice_number: nextInvoice.invoice_number,
+        amount: entry.amount,
+        currency: entry.currency,
+        ...entry.metadata,
+      },
+      created_at: entry.created_at,
+      profile: Array.isArray(entry.actor)
+        ? entry.actor[0] ?? null
+        : entry.actor ?? null,
+    }));
 
     setInvoice(nextInvoice);
-    setActivity(filteredActivity);
+    setActivity(
+      [...filteredActivity, ...paymentHistory].sort(
+        (left, right) =>
+          new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+      )
+    );
     setLoading(false);
   }, [currentOrg?.id, id, role, user?.id]);
 
@@ -272,6 +328,7 @@ export default function InvoiceDetailPage() {
         amount_paid: nextPaid,
         status: nextStatus,
         paid_at: balance === 0 ? nowIso : invoice.paid_at,
+        last_payment_received_at: nowIso,
       })
       .eq("id", invoice.id);
 
@@ -295,6 +352,25 @@ export default function InvoiceDetailPage() {
         invoice_id: invoice.id,
         invoice_number: invoice.invoice_number,
         amount,
+        resulting_amount_paid: nextPaid,
+        resulting_balance: balance,
+        fully_paid: balance === 0,
+        source: "manual_reconciliation",
+      },
+    });
+
+    await sb.from("invoice_payment_events").insert({
+      org_id: invoice.org_id,
+      invoice_id: invoice.id,
+      actor_user_id: user.id,
+      source: "workspace",
+      event_type: "payment_recorded",
+      status: balance === 0 ? "succeeded" : "reviewed",
+      amount,
+      currency: invoice.currency,
+      metadata: {
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number,
         resulting_amount_paid: nextPaid,
         resulting_balance: balance,
         fully_paid: balance === 0,
@@ -335,6 +411,16 @@ export default function InvoiceDetailPage() {
       return;
     }
 
+    const nowIso = new Date().toISOString();
+    const sb = getSupabaseBrowserClient();
+
+    await sb
+      .from("invoices")
+      .update({
+        last_recovery_reviewed_at: nowIso,
+      })
+      .eq("id", invoice.id);
+
     await logInvoiceActivity({
       orgId: invoice.org_id,
       userId: user?.id ?? null,
@@ -342,6 +428,24 @@ export default function InvoiceDetailPage() {
       invoiceNumber: invoice.invoice_number,
       action: "invoice.recovery_reviewed",
       metadata: {
+        outstanding_amount: paymentSummary.outstandingAmount,
+        collected_amount: paymentSummary.collectedAmount,
+        source_intent: intent ?? "inline",
+      },
+    });
+
+    await sb.from("invoice_payment_events").insert({
+      org_id: invoice.org_id,
+      invoice_id: invoice.id,
+      actor_user_id: user?.id ?? null,
+      source: "workspace",
+      event_type: "invoice.recovery_reviewed",
+      status: "reviewed",
+      amount: paymentSummary.outstandingAmount,
+      currency: invoice.currency,
+      metadata: {
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number,
         outstanding_amount: paymentSummary.outstandingAmount,
         collected_amount: paymentSummary.collectedAmount,
         source_intent: intent ?? "inline",
@@ -773,6 +877,50 @@ export default function InvoiceDetailPage() {
                       : "Your role can review payment posture here while reconciliation stays with operators."}
                 </div>
               )}
+            </div>
+
+            <div className="mt-5 rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                    Refund / credit / void groundwork
+                  </p>
+                  <p className="mt-1 text-sm text-neutral-500">
+                    These fields are now carried on the invoice record so future refund, credit, and void flows can enter the same history without reshaping the ledger later.
+                  </p>
+                </div>
+                <Badge variant={invoice.voided_at ? "danger" : "outline"}>
+                  {invoice.voided_at ? "Voided" : "Ledger ready"}
+                </Badge>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-neutral-200/70 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950/40">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                    Credited
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {fmt(Number(invoice.credited_amount ?? 0))}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-neutral-200/70 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950/40">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                    Refunded
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {fmt(Number(invoice.refunded_amount ?? 0))}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-neutral-200/70 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950/40">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                    Recovery reviewed
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-neutral-900 dark:text-white">
+                    {invoice.last_recovery_reviewed_at
+                      ? fmtDate(invoice.last_recovery_reviewed_at)
+                      : "Not yet logged"}
+                  </p>
+                </div>
+              </div>
             </div>
           </Card>
 

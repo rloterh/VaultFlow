@@ -36,6 +36,10 @@ const activityConfig: Record<
   "invoice.reminder_sent": { label: "Logged reminder", icon: BellRing, tone: "info" },
   "invoice.cancelled": { label: "Cancelled invoice", icon: XCircle, tone: "danger" },
   "invoice.deleted": { label: "Deleted invoice", icon: Trash2, tone: "danger" },
+  "invoice.payment_recorded": { label: "Recorded payment", icon: CreditCard, tone: "success" },
+  "invoice.recovery_reviewed": { label: "Reviewed recovery", icon: AlertTriangle, tone: "warning" },
+  "invoice.credited": { label: "Applied credit", icon: CreditCard, tone: "info" },
+  "invoice.voided": { label: "Voided invoice", icon: XCircle, tone: "danger" },
   "client.created": { label: "Added client", icon: Users },
   "client.updated": { label: "Updated client", icon: Edit },
   "client.archived": { label: "Archived client", icon: Trash2, tone: "danger" },
@@ -48,6 +52,8 @@ const activityConfig: Record<
   subscription_cancelled: { label: "Cancelled subscription", icon: XCircle, tone: "danger" },
   payment_received: { label: "Received payment", icon: CreditCard, tone: "success" },
   payment_failed: { label: "Payment failed", icon: AlertTriangle, tone: "danger" },
+  payment_recorded: { label: "Recorded payment", icon: CreditCard, tone: "success" },
+  payment_refunded: { label: "Refunded payment", icon: CreditCard, tone: "warning" },
 };
 
 function titleCase(value: string) {

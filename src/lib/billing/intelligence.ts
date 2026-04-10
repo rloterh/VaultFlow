@@ -149,6 +149,34 @@ function describeBillingEvent(entry: ActivityEntry): BillingTimelineItem {
         tone: "danger",
         createdAt: entry.created_at,
       };
+    case "payment_refunded":
+      return {
+        id: entry.id,
+        title: "Payment refunded",
+        description: amountLabel
+          ? `${amountLabel} was returned and should be reconciled against the invoice ledger.`
+          : "A refunded payment is waiting for invoice-side reconciliation.",
+        tone: "warning",
+        createdAt: entry.created_at,
+      };
+    case "invoice.credited":
+      return {
+        id: entry.id,
+        title: "Credit applied",
+        description: amountLabel
+          ? `${amountLabel} was recorded as invoice credit.`
+          : "A credit adjustment was recorded against an invoice.",
+        tone: "info",
+        createdAt: entry.created_at,
+      };
+    case "invoice.voided":
+      return {
+        id: entry.id,
+        title: "Invoice voided",
+        description: "An invoice was voided and should no longer remain in active recovery views.",
+        tone: "danger",
+        createdAt: entry.created_at,
+      };
     case "payment_recorded":
       return {
         id: entry.id,

@@ -128,6 +128,37 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
           createdAt: entry.created_at,
           actorName,
         };
+      case "payment_refunded":
+        return {
+          id: entry.id,
+          title: "Payment refunded",
+          tone: "warning",
+          detail: metadata.amount
+            ? `${fmt(Number(metadata.amount))} was refunded back to the customer.`
+            : "A payment refund was recorded for this invoice.",
+          createdAt: entry.created_at,
+          actorName,
+        };
+      case "invoice.credited":
+        return {
+          id: entry.id,
+          title: "Credit applied",
+          tone: "info",
+          detail: metadata.amount
+            ? `${fmt(Number(metadata.amount))} was reserved as credit against this invoice.`
+            : "A credit adjustment was recorded for this invoice.",
+          createdAt: entry.created_at,
+          actorName,
+        };
+      case "invoice.voided":
+        return {
+          id: entry.id,
+          title: "Invoice voided",
+          tone: "danger",
+          detail: "This invoice was voided as part of a later-stage billing lifecycle adjustment.",
+          createdAt: entry.created_at,
+          actorName,
+        };
       case "invoice.recovery_reviewed":
         return {
           id: entry.id,
