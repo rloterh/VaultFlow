@@ -106,6 +106,7 @@ export interface InvoicePaymentEvent {
   org_id: string;
   invoice_id: string | null;
   actor_user_id: string | null;
+  stripe_event_id?: string | null;
   stripe_invoice_id: string | null;
   stripe_payment_intent_id: string | null;
   source: string;

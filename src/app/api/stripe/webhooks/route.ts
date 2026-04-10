@@ -22,6 +22,9 @@ type LinkedInvoiceRecord = {
   status: string;
   amount_paid: number;
   total: number;
+  refunded_amount?: number | null;
+  credited_amount?: number | null;
+  voided_at?: string | null;
 };
 
 function getStripeInvoiceId(invoice: Stripe.Invoice) {
@@ -40,17 +43,26 @@ function getStripePaymentIntentId(invoice: Stripe.Invoice) {
   return typeof paymentIntent === "string" ? paymentIntent : paymentIntent.id;
 }
 
-async function findLinkedOrgAndInvoice(invoice: Stripe.Invoice) {
+async function findLinkedOrgAndInvoiceByRefs({
+  customerId,
+  orgIdFromMetadata,
+  stripeInvoiceId,
+  stripePaymentIntentId,
+  appInvoiceId,
+  appInvoiceNumber,
+}: {
+  customerId?: string | null;
+  orgIdFromMetadata?: string | null;
+  stripeInvoiceId?: string | null;
+  stripePaymentIntentId?: string | null;
+  appInvoiceId?: string | null;
+  appInvoiceNumber?: string | null;
+}) {
   const supabaseAdmin = getSupabaseAdmin();
-  const customerId =
-    typeof invoice.customer === "string"
-      ? invoice.customer
-      : invoice.customer?.id;
-  const orgIdFromMetadata = invoice.metadata?.org_id;
-  const stripeInvoiceId = getStripeInvoiceId(invoice);
-  const stripePaymentIntentId = getStripePaymentIntentId(invoice);
-  const appInvoiceId = invoice.metadata?.invoice_id;
-  const appInvoiceNumber = invoice.metadata?.invoice_number;
+  const normalizedStripeInvoiceId = stripeInvoiceId ?? null;
+  const normalizedStripePaymentIntentId = stripePaymentIntentId ?? null;
+  const normalizedAppInvoiceId = appInvoiceId ?? null;
+  const normalizedAppInvoiceNumber = appInvoiceNumber ?? null;
 
   let orgId = orgIdFromMetadata ?? null;
 
@@ -69,16 +81,16 @@ async function findLinkedOrgAndInvoice(invoice: Stripe.Invoice) {
       supabaseAdmin,
       orgId: null,
       linkedInvoice: null,
-      stripeInvoiceId,
-      stripePaymentIntentId,
+      stripeInvoiceId: normalizedStripeInvoiceId,
+      stripePaymentIntentId: normalizedStripePaymentIntentId,
     };
   }
 
   const lookupCandidates = [
-    { column: "stripe_invoice_id", value: stripeInvoiceId },
-    { column: "stripe_payment_intent_id", value: stripePaymentIntentId },
-    { column: "id", value: appInvoiceId },
-    { column: "invoice_number", value: appInvoiceNumber },
+    { column: "stripe_invoice_id", value: normalizedStripeInvoiceId },
+    { column: "stripe_payment_intent_id", value: normalizedStripePaymentIntentId },
+    { column: "id", value: normalizedAppInvoiceId },
+    { column: "invoice_number", value: normalizedAppInvoiceNumber },
   ] as const;
 
   for (const candidate of lookupCandidates) {
@@ -88,7 +100,9 @@ async function findLinkedOrgAndInvoice(invoice: Stripe.Invoice) {
 
     const { data } = await supabaseAdmin
       .from("invoices")
-      .select("id, org_id, invoice_number, status, amount_paid, total")
+      .select(
+        "id, org_id, invoice_number, status, amount_paid, total, refunded_amount, credited_amount, voided_at"
+      )
       .eq("org_id", orgId)
       .eq(candidate.column, candidate.value)
       .maybeSingle();
@@ -98,8 +112,8 @@ async function findLinkedOrgAndInvoice(invoice: Stripe.Invoice) {
         supabaseAdmin,
         orgId,
         linkedInvoice: data as LinkedInvoiceRecord,
-        stripeInvoiceId,
-        stripePaymentIntentId,
+        stripeInvoiceId: normalizedStripeInvoiceId,
+        stripePaymentIntentId: normalizedStripePaymentIntentId,
       };
     }
   }
@@ -108,12 +122,40 @@ async function findLinkedOrgAndInvoice(invoice: Stripe.Invoice) {
     supabaseAdmin,
     orgId,
     linkedInvoice: null,
-    stripeInvoiceId,
-    stripePaymentIntentId,
+    stripeInvoiceId: normalizedStripeInvoiceId,
+    stripePaymentIntentId: normalizedStripePaymentIntentId,
   };
 }
 
+async function findLinkedOrgAndInvoice(invoice: Stripe.Invoice) {
+  const customerId =
+    typeof invoice.customer === "string"
+      ? invoice.customer
+      : invoice.customer?.id;
+
+  return findLinkedOrgAndInvoiceByRefs({
+    customerId,
+    orgIdFromMetadata: invoice.metadata?.org_id,
+    stripeInvoiceId: getStripeInvoiceId(invoice),
+    stripePaymentIntentId: getStripePaymentIntentId(invoice),
+    appInvoiceId: invoice.metadata?.invoice_id,
+    appInvoiceNumber: invoice.metadata?.invoice_number,
+  });
+}
+
+async function hasProcessedStripeEvent(stripeEventId: string) {
+  const supabaseAdmin = getSupabaseAdmin();
+  const { data } = await supabaseAdmin
+    .from("invoice_payment_events")
+    .select("id")
+    .eq("stripe_event_id", stripeEventId)
+    .maybeSingle();
+
+  return !!data?.id;
+}
+
 async function insertPaymentEvent({
+  stripeEventId,
   orgId,
   linkedInvoice,
   stripeInvoiceId,
@@ -124,6 +166,7 @@ async function insertPaymentEvent({
   currency,
   metadata,
 }: {
+  stripeEventId?: string | null;
   orgId: string;
   linkedInvoice: LinkedInvoiceRecord | null;
   stripeInvoiceId: string | null;
@@ -147,6 +190,7 @@ async function insertPaymentEvent({
     org_id: orgId,
     invoice_id: linkedInvoice?.id ?? null,
     actor_user_id: null,
+    stripe_event_id: stripeEventId ?? null,
     stripe_invoice_id: stripeInvoiceId,
     stripe_payment_intent_id: stripePaymentIntentId,
     source: "stripe",
@@ -202,13 +246,31 @@ export async function POST(request: Request) {
 
       case "invoice.paid": {
         const invoice = event.data.object as Stripe.Invoice;
-        await handleInvoicePaid(invoice);
+        await handleInvoicePaid(event.id, invoice);
         break;
       }
 
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
-        await handlePaymentFailed(invoice);
+        await handlePaymentFailed(event.id, invoice);
+        break;
+      }
+
+      case "charge.refunded": {
+        const charge = event.data.object as Stripe.Charge;
+        await handleChargeRefunded(event.id, charge);
+        break;
+      }
+
+      case "credit_note.created": {
+        const creditNote = event.data.object as Stripe.CreditNote;
+        await handleCreditNoteCreated(event.id, creditNote);
+        break;
+      }
+
+      case "invoice.voided": {
+        const invoice = event.data.object as Stripe.Invoice;
+        await handleInvoiceVoided(event.id, invoice);
         break;
       }
 
@@ -314,7 +376,11 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   });
 }
 
-async function handleInvoicePaid(invoice: Stripe.Invoice) {
+async function handleInvoicePaid(stripeEventId: string, invoice: Stripe.Invoice) {
+  if (await hasProcessedStripeEvent(stripeEventId)) {
+    return;
+  }
+
   const {
     supabaseAdmin,
     orgId,
@@ -363,6 +429,7 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
   });
 
   await insertPaymentEvent({
+    stripeEventId,
     orgId,
     linkedInvoice,
     stripeInvoiceId,
@@ -379,7 +446,11 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
   });
 }
 
-async function handlePaymentFailed(invoice: Stripe.Invoice) {
+async function handlePaymentFailed(stripeEventId: string, invoice: Stripe.Invoice) {
+  if (await hasProcessedStripeEvent(stripeEventId)) {
+    return;
+  }
+
   const {
     supabaseAdmin,
     orgId,
@@ -428,6 +499,7 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   });
 
   await insertPaymentEvent({
+    stripeEventId,
     orgId,
     linkedInvoice,
     stripeInvoiceId,
@@ -438,6 +510,253 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
     currency: invoice.currency,
     metadata: {
       ...metadata,
+      invoice_id: linkedInvoice?.id ?? null,
+      invoice_number: linkedInvoice?.invoice_number ?? null,
+    },
+  });
+}
+
+async function handleChargeRefunded(stripeEventId: string, charge: Stripe.Charge) {
+  if (await hasProcessedStripeEvent(stripeEventId)) {
+    return;
+  }
+
+  const chargeWithInvoice = charge as Stripe.Charge & {
+    invoice?: string | Stripe.Invoice | null;
+  };
+  const invoiceId =
+    typeof chargeWithInvoice.invoice === "string"
+      ? chargeWithInvoice.invoice
+      : chargeWithInvoice.invoice?.id;
+  const paymentIntentId =
+    typeof charge.payment_intent === "string"
+      ? charge.payment_intent
+      : charge.payment_intent?.id;
+  const customerId =
+    typeof charge.customer === "string" ? charge.customer : charge.customer?.id;
+  const metadata = charge.metadata ?? {};
+
+  const {
+    supabaseAdmin,
+    orgId,
+    linkedInvoice,
+    stripeInvoiceId,
+    stripePaymentIntentId,
+  } = await findLinkedOrgAndInvoiceByRefs({
+    customerId,
+    orgIdFromMetadata: metadata.org_id ?? null,
+    stripeInvoiceId: invoiceId,
+    stripePaymentIntentId: paymentIntentId,
+    appInvoiceId: metadata.invoice_id ?? null,
+    appInvoiceNumber: metadata.invoice_number ?? null,
+  });
+
+  if (!orgId) return;
+
+  const amount = (charge.amount_refunded ?? 0) / 100;
+  const nextRefundedAmount = Number(linkedInvoice?.refunded_amount ?? 0) + amount;
+  const remainingBalance = linkedInvoice
+    ? Math.max(Number(linkedInvoice.total) - Math.max(Number(linkedInvoice.amount_paid) - nextRefundedAmount, 0) - Number(linkedInvoice.credited_amount ?? 0), 0)
+    : 0;
+  const eventMetadata = {
+    amount,
+    currency: charge.currency,
+    stripe_invoice_id: stripeInvoiceId,
+    stripe_payment_intent_id: stripePaymentIntentId,
+    linked_invoice_id: linkedInvoice?.id ?? null,
+    linked_invoice_number: linkedInvoice?.invoice_number ?? null,
+    billing_reference: linkedInvoice
+      ? buildInvoiceBillingReference(
+          linkedInvoice.org_id,
+          linkedInvoice.id,
+          linkedInvoice.invoice_number
+        )
+      : null,
+    resulting_refunded_amount: nextRefundedAmount,
+    resulting_balance: remainingBalance,
+  };
+
+  if (linkedInvoice) {
+    await supabaseAdmin
+      .from("invoices")
+      .update({
+        refunded_amount: nextRefundedAmount,
+      })
+      .eq("id", linkedInvoice.id);
+  }
+
+  await supabaseAdmin.from("activity_log").insert({
+    org_id: orgId,
+    entity_type: "billing",
+    entity_id: linkedInvoice?.id ?? orgId,
+    action: "payment_refunded",
+    metadata: eventMetadata,
+  });
+
+  await insertPaymentEvent({
+    stripeEventId,
+    orgId,
+    linkedInvoice,
+    stripeInvoiceId,
+    stripePaymentIntentId,
+    eventType: "payment_refunded",
+    status: "refunded",
+    amount,
+    currency: charge.currency,
+    metadata: {
+      ...eventMetadata,
+      invoice_id: linkedInvoice?.id ?? null,
+      invoice_number: linkedInvoice?.invoice_number ?? null,
+    },
+  });
+}
+
+async function handleCreditNoteCreated(
+  stripeEventId: string,
+  creditNote: Stripe.CreditNote
+) {
+  if (await hasProcessedStripeEvent(stripeEventId)) {
+    return;
+  }
+
+  const {
+    supabaseAdmin,
+    orgId,
+    linkedInvoice,
+    stripeInvoiceId,
+  } = await findLinkedOrgAndInvoiceByRefs({
+    customerId:
+      typeof creditNote.customer === "string"
+        ? creditNote.customer
+        : creditNote.customer?.id,
+    stripeInvoiceId:
+      typeof creditNote.invoice === "string"
+        ? creditNote.invoice
+        : creditNote.invoice?.id,
+  });
+
+  if (!orgId) return;
+
+  const amount = (creditNote.amount ?? 0) / 100;
+  const nextCreditedAmount = Number(linkedInvoice?.credited_amount ?? 0) + amount;
+  const remainingBalance = linkedInvoice
+    ? Math.max(Number(linkedInvoice.total) - Math.max(Number(linkedInvoice.amount_paid) - Number(linkedInvoice.refunded_amount ?? 0), 0) - nextCreditedAmount, 0)
+    : 0;
+  const eventMetadata = {
+    amount,
+    currency: creditNote.currency,
+    stripe_invoice_id: stripeInvoiceId,
+    linked_invoice_id: linkedInvoice?.id ?? null,
+    linked_invoice_number: linkedInvoice?.invoice_number ?? null,
+    billing_reference: linkedInvoice
+      ? buildInvoiceBillingReference(
+          linkedInvoice.org_id,
+          linkedInvoice.id,
+          linkedInvoice.invoice_number
+        )
+      : null,
+    credit_note_id: creditNote.id,
+    resulting_credited_amount: nextCreditedAmount,
+    resulting_balance: remainingBalance,
+  };
+
+  if (linkedInvoice) {
+    await supabaseAdmin
+      .from("invoices")
+      .update({
+        credited_amount: nextCreditedAmount,
+      })
+      .eq("id", linkedInvoice.id);
+  }
+
+  await supabaseAdmin.from("activity_log").insert({
+    org_id: orgId,
+    entity_type: "billing",
+    entity_id: linkedInvoice?.id ?? orgId,
+    action: "invoice.credited",
+    metadata: eventMetadata,
+  });
+
+  await insertPaymentEvent({
+    stripeEventId,
+    orgId,
+    linkedInvoice,
+    stripeInvoiceId,
+    stripePaymentIntentId: null,
+    eventType: "invoice.credited",
+    status: "credited",
+    amount,
+    currency: creditNote.currency,
+    metadata: {
+      ...eventMetadata,
+      invoice_id: linkedInvoice?.id ?? null,
+      invoice_number: linkedInvoice?.invoice_number ?? null,
+    },
+  });
+}
+
+async function handleInvoiceVoided(stripeEventId: string, invoice: Stripe.Invoice) {
+  if (await hasProcessedStripeEvent(stripeEventId)) {
+    return;
+  }
+
+  const {
+    supabaseAdmin,
+    orgId,
+    linkedInvoice,
+    stripeInvoiceId,
+    stripePaymentIntentId,
+  } = await findLinkedOrgAndInvoice(invoice);
+
+  if (!orgId) return;
+
+  const eventMetadata = {
+    amount: (invoice.amount_due ?? 0) / 100,
+    currency: invoice.currency,
+    stripe_invoice_id: stripeInvoiceId,
+    stripe_payment_intent_id: stripePaymentIntentId,
+    stripe_invoice_number: invoice.number,
+    linked_invoice_id: linkedInvoice?.id ?? null,
+    linked_invoice_number: linkedInvoice?.invoice_number ?? null,
+    billing_reference: linkedInvoice
+      ? buildInvoiceBillingReference(
+          linkedInvoice.org_id,
+          linkedInvoice.id,
+          linkedInvoice.invoice_number
+        )
+      : null,
+  };
+
+  if (linkedInvoice) {
+    await supabaseAdmin
+      .from("invoices")
+      .update({
+        voided_at: new Date().toISOString(),
+        status: "cancelled",
+      })
+      .eq("id", linkedInvoice.id);
+  }
+
+  await supabaseAdmin.from("activity_log").insert({
+    org_id: orgId,
+    entity_type: "billing",
+    entity_id: linkedInvoice?.id ?? orgId,
+    action: "invoice.voided",
+    metadata: eventMetadata,
+  });
+
+  await insertPaymentEvent({
+    stripeEventId,
+    orgId,
+    linkedInvoice,
+    stripeInvoiceId,
+    stripePaymentIntentId,
+    eventType: "invoice.voided",
+    status: "voided",
+    amount: (invoice.amount_due ?? 0) / 100,
+    currency: invoice.currency,
+    metadata: {
+      ...eventMetadata,
       invoice_id: linkedInvoice?.id ?? null,
       invoice_number: linkedInvoice?.invoice_number ?? null,
     },

@@ -1594,7 +1594,7 @@ export default function InvoiceDetailPage() {
                 </div>
               )}
               <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-neutral-800">
-                Refunds, credits, and void workflows will slot into this timeline once the extended billing-ledger schema is enabled in a later Phase 3 step.
+                Stripe-linked refunds, credits, voids, and manual finance actions now land here together so recovery history stays audit-ready.
               </div>
             </div>
           </Card>
