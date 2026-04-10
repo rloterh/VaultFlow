@@ -14,6 +14,21 @@ export function getStripeClient() {
   return stripeClient;
 }
 
+export interface StripeInvoiceReferencePayload {
+  orgId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+}
+
+function buildStripeInvoiceMetadata(reference: StripeInvoiceReferencePayload) {
+  return {
+    org_id: reference.orgId,
+    invoice_id: reference.invoiceId,
+    invoice_number: reference.invoiceNumber,
+    billing_reference: `${reference.orgId}:${reference.invoiceId}:${reference.invoiceNumber}`,
+  };
+}
+
 // ============================================
 // PRICE IDS — set these in Stripe Dashboard
 // ============================================
@@ -98,6 +113,54 @@ export async function createPortalSession(
   });
 
   return session.url;
+}
+
+export async function syncStripeInvoiceReferences(
+  reference: StripeInvoiceReferencePayload & {
+    stripeInvoiceId?: string | null;
+    stripePaymentIntentId?: string | null;
+  }
+) {
+  const stripe = getStripeClient();
+  const metadata = buildStripeInvoiceMetadata(reference);
+  const tasks: Promise<unknown>[] = [];
+
+  if (reference.stripeInvoiceId) {
+    tasks.push(
+      stripe.invoices.update(reference.stripeInvoiceId, {
+        metadata,
+      })
+    );
+  }
+
+  if (reference.stripePaymentIntentId) {
+    tasks.push(
+      stripe.paymentIntents.update(reference.stripePaymentIntentId, {
+        metadata,
+      })
+    );
+  }
+
+  await Promise.all(tasks);
+
+  return {
+    syncedInvoice: !!reference.stripeInvoiceId,
+    syncedPaymentIntent: !!reference.stripePaymentIntentId,
+  };
+}
+
+export async function createStripeRefund(params: {
+  paymentIntentId: string;
+  amount: number;
+  metadata: Record<string, string>;
+}) {
+  const stripe = getStripeClient();
+
+  return stripe.refunds.create({
+    payment_intent: params.paymentIntentId,
+    amount: Math.round(params.amount * 100),
+    metadata: params.metadata,
+  });
 }
 
 /**

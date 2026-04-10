@@ -149,6 +149,16 @@ function describeBillingEvent(entry: ActivityEntry): BillingTimelineItem {
         tone: "danger",
         createdAt: entry.created_at,
       };
+    case "payment_refund_requested":
+      return {
+        id: entry.id,
+        title: "Refund initiated",
+        description: amountLabel
+          ? `${amountLabel} was submitted to Stripe and is awaiting final settlement.`
+          : "A Stripe refund has been initiated and is awaiting settlement.",
+        tone: "info",
+        createdAt: entry.created_at,
+      };
     case "payment_refunded":
       return {
         id: entry.id,

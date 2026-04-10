@@ -83,6 +83,7 @@ const LEDGER_EVENT_ACTIONS = new Set([
   "payment_recorded",
   "payment_received",
   "payment_failed",
+  "payment_refund_requested",
   "payment_refunded",
   "invoice.credited",
   "invoice.voided",
@@ -208,7 +209,7 @@ export default function InvoiceDetailPage() {
       sb
         .from("invoice_payment_events")
         .select(
-          "id, invoice_id, event_type, amount, currency, metadata, created_at, actor_user_id, actor:profiles(full_name, avatar_url, email)"
+          "id, invoice_id, event_type, status, amount, currency, metadata, created_at, actor_user_id, stripe_event_id, stripe_invoice_id, stripe_payment_intent_id, actor:profiles(full_name, avatar_url, email)"
         )
         .eq("org_id", nextInvoice.org_id)
         .eq("invoice_id", nextInvoice.id)
@@ -230,7 +231,17 @@ export default function InvoiceDetailPage() {
     const paymentHistory = ((paymentEventRes.data ?? []) as Array<
       Pick<
         InvoicePaymentEvent,
-        "id" | "invoice_id" | "event_type" | "amount" | "currency" | "metadata" | "created_at"
+        | "id"
+        | "invoice_id"
+        | "event_type"
+        | "status"
+        | "amount"
+        | "currency"
+        | "metadata"
+        | "created_at"
+        | "stripe_event_id"
+        | "stripe_invoice_id"
+        | "stripe_payment_intent_id"
       > & {
         actor?: {
           full_name?: string | null;
@@ -243,13 +254,17 @@ export default function InvoiceDetailPage() {
       action: entry.event_type,
       entity_type: "invoice",
       entity_id: entry.invoice_id ?? nextInvoice.id,
-      metadata: {
-        invoice_id: nextInvoice.id,
-        invoice_number: nextInvoice.invoice_number,
-        amount: entry.amount,
-        currency: entry.currency,
-        ...entry.metadata,
-      },
+        metadata: {
+          invoice_id: nextInvoice.id,
+          invoice_number: nextInvoice.invoice_number,
+          status: entry.status,
+          amount: entry.amount,
+          currency: entry.currency,
+          stripe_event_id: entry.stripe_event_id ?? null,
+          stripe_invoice_id: entry.stripe_invoice_id ?? null,
+          stripe_payment_intent_id: entry.stripe_payment_intent_id ?? null,
+          ...entry.metadata,
+        },
       created_at: entry.created_at,
       profile: Array.isArray(entry.actor)
         ? entry.actor[0] ?? null
@@ -578,6 +593,27 @@ export default function InvoiceDetailPage() {
       next_stripe_payment_intent_id: nextStripePaymentIntentId,
     });
 
+    if (nextStripeInvoiceId || nextStripePaymentIntentId) {
+      const syncResponse = await fetch("/api/stripe/invoice-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoiceId: invoice.id }),
+      });
+
+      if (!syncResponse.ok) {
+        const payload = (await syncResponse.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        addToast({
+          type: "warning",
+          title: "Stripe metadata sync pending",
+          description:
+            payload?.error ??
+            "The identifiers were saved locally, but Stripe metadata could not be refreshed yet.",
+        });
+      }
+    }
+
     setSavingStripeLink(false);
     await fetchInvoice();
     addToast({
@@ -604,6 +640,8 @@ export default function InvoiceDetailPage() {
       0
     );
     const maxCreditable = Math.max(paymentSummary.outstandingAmount, 0);
+    const linkedStripePaymentIntentId =
+      stripePaymentIntentIdInput.trim() || invoice.stripe_payment_intent_id || null;
 
     if (kind !== "void" && (!Number.isFinite(adjustment) || adjustment <= 0)) {
       addToast({
@@ -628,6 +666,95 @@ export default function InvoiceDetailPage() {
         type: "error",
         title: "Credit exceeds remaining balance",
         description: `Only ${fmt(maxCreditable)} remains open on this invoice.`,
+      });
+      return;
+    }
+
+    if (kind === "refund" && linkedStripePaymentIntentId) {
+      setLedgerActionLoading(kind);
+      const refundResponse = await fetch("/api/stripe/refund", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: invoice.id,
+          amount: adjustment,
+          note,
+        }),
+      });
+
+      const refundPayload = (await refundResponse.json().catch(() => null)) as {
+        error?: string;
+        refundId?: string;
+        status?: string;
+      } | null;
+
+      if (!refundResponse.ok) {
+        addToast({
+          type: "error",
+          title: "Stripe refund failed",
+          description:
+            refundPayload?.error ??
+            "Stripe could not accept the refund request for this invoice.",
+        });
+        setLedgerActionLoading(null);
+        return;
+      }
+
+      const metadata = {
+        ...buildInvoiceIdentifiers(invoice),
+        amount: adjustment,
+        adjustment_note: note || null,
+        refund_status: refundPayload?.status ?? "pending",
+        stripe_refund_id: refundPayload?.refundId ?? null,
+        stripe_invoice_id:
+          stripeInvoiceIdInput.trim() || invoice.stripe_invoice_id || null,
+        stripe_payment_intent_id: linkedStripePaymentIntentId,
+        resulting_balance: paymentSummary.outstandingAmount + adjustment,
+        source: "stripe_refund",
+      };
+
+      await sb
+        .from("invoices")
+        .update({
+          last_recovery_reviewed_at: nowIso,
+        })
+        .eq("id", invoice.id);
+
+      await sb.from("invoice_payment_events").insert({
+        org_id: invoice.org_id,
+        invoice_id: invoice.id,
+        actor_user_id: user?.id ?? null,
+        stripe_invoice_id:
+          stripeInvoiceIdInput.trim() || invoice.stripe_invoice_id || null,
+        stripe_payment_intent_id: linkedStripePaymentIntentId,
+        source: "workspace",
+        event_type: "payment_refund_requested",
+        status: "pending",
+        amount: adjustment,
+        currency: invoice.currency,
+        metadata,
+      });
+
+      await logInvoiceActivity({
+        orgId: invoice.org_id,
+        userId: user?.id ?? null,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        action: "payment_refund_requested",
+        metadata,
+      });
+
+      await recordBillingTimelineEvent(invoice, "payment_refund_requested", metadata);
+
+      setAdjustmentAmount("");
+      setAdjustmentNote("");
+      setLedgerActionLoading(null);
+      await fetchInvoice();
+      addToast({
+        type: "success",
+        title: "Stripe refund initiated",
+        description:
+          "The refund request was sent to Stripe and is now tracked in this invoice timeline.",
       });
       return;
     }
@@ -1332,7 +1459,7 @@ export default function InvoiceDetailPage() {
                     Stripe linkage
                   </p>
                   <p className="mt-1 text-sm text-neutral-500">
-                    Capture Stripe invoice and payment intent identifiers as soon as finance has them so webhook matching stops relying on weak fallback inference.
+                    Capture Stripe invoice and payment intent identifiers early so send-time metadata sync and later webhook matching stop relying on weak fallback inference.
                   </p>
                 </div>
                 <Badge variant={invoice.stripe_invoice_id || invoice.stripe_payment_intent_id ? "success" : "outline"}>

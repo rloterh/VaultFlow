@@ -58,6 +58,8 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
       resulting_credited_amount?: number;
       resulting_refunded_amount?: number;
       status?: string;
+      refund_status?: string;
+      stripe_refund_id?: string;
       stripe_invoice_number?: string;
     };
     const actorName = entry.actor?.full_name || entry.actor?.email || "System";
@@ -131,14 +133,30 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
           createdAt: entry.created_at,
           actorName,
         };
+      case "payment_refund_requested":
+        return {
+          id: entry.id,
+          title: "Stripe refund initiated",
+          tone: "info",
+          detail: metadata.amount
+            ? `${fmt(Number(metadata.amount))} was submitted to Stripe for refund${typeof metadata.stripe_refund_id === "string" ? ` (${metadata.stripe_refund_id})` : ""}.${typeof metadata.resulting_balance === "number" ? ` Projected open balance: ${fmt(Number(metadata.resulting_balance))}.` : ""}${typeof metadata.adjustment_note === "string" && metadata.adjustment_note.trim().length > 0 ? ` Note: ${metadata.adjustment_note}` : ""}`
+            : "A Stripe refund was initiated for this invoice.",
+          createdAt: entry.created_at,
+          actorName,
+        };
       case "payment_refunded":
         return {
           id: entry.id,
           title: "Payment refunded",
-          tone: "warning",
-          detail: metadata.amount
-            ? `${fmt(Number(metadata.amount))} was refunded back to the customer.${typeof metadata.resulting_balance === "number" ? ` ${fmt(Number(metadata.resulting_balance))} remains open.` : ""}${typeof metadata.adjustment_note === "string" && metadata.adjustment_note.trim().length > 0 ? ` Note: ${metadata.adjustment_note}` : ""}`
-            : "A payment refund was recorded for this invoice.",
+          tone: metadata.status === "pending" ? "info" : "warning",
+          detail:
+            metadata.status === "pending"
+              ? metadata.amount
+                ? `${fmt(Number(metadata.amount))} is still pending settlement in Stripe.`
+                : "A Stripe refund is still pending settlement."
+              : metadata.amount
+                ? `${fmt(Number(metadata.amount))} was refunded back to the customer.${typeof metadata.resulting_balance === "number" ? ` ${fmt(Number(metadata.resulting_balance))} remains open.` : ""}${typeof metadata.adjustment_note === "string" && metadata.adjustment_note.trim().length > 0 ? ` Note: ${metadata.adjustment_note}` : ""}`
+                : "A payment refund was recorded for this invoice.",
           createdAt: entry.created_at,
           actorName,
         };

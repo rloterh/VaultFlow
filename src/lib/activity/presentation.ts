@@ -53,6 +53,7 @@ const activityConfig: Record<
   subscription_cancelled: { label: "Cancelled subscription", icon: XCircle, tone: "danger" },
   payment_received: { label: "Received payment", icon: CreditCard, tone: "success" },
   payment_failed: { label: "Payment failed", icon: AlertTriangle, tone: "danger" },
+  payment_refund_requested: { label: "Initiated refund", icon: CreditCard, tone: "info" },
   payment_recorded: { label: "Recorded payment", icon: CreditCard, tone: "success" },
   payment_refunded: { label: "Refunded payment", icon: CreditCard, tone: "warning" },
 };

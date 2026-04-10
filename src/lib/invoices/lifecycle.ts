@@ -186,6 +186,21 @@ export async function transitionInvoiceStatus(
     },
   });
 
+  if (
+    nextStatus === "sent" &&
+    (invoice.stripe_invoice_id || invoice.stripe_payment_intent_id)
+  ) {
+    try {
+      await fetch("/api/stripe/invoice-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invoiceId: invoice.id }),
+      });
+    } catch {
+      // Sending the invoice should still succeed even if Stripe metadata sync is unavailable.
+    }
+  }
+
   return {
     ...invoice,
     ...updates,
