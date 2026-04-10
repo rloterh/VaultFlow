@@ -255,7 +255,7 @@ export default function HomePage() {
                       <p className="mt-2 text-lg font-semibold text-neutral-900 dark:text-white">
                         14 active seats
                       </p>
-                      <p className="mt-1 text-xs text-neutral-500">Owners, admins, managers, and members</p>
+                      <p className="mt-1 text-xs text-neutral-500">Owners, admins, finance managers, managers, vendors, viewers, and members</p>
                     </div>
                   </div>
                 </div>

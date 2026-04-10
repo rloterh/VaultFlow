@@ -334,7 +334,7 @@ function BillingContent() {
 
 export default function BillingPage() {
   return (
-    <AuthGuard minRole="admin">
+    <AuthGuard permission="org:billing">
       <BillingContent />
     </AuthGuard>
   );

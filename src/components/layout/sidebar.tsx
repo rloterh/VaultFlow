@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
-import { hasMinRole } from "@/config/roles";
+import { hasMinRole, hasPermission } from "@/config/roles";
 import { mainNavItems, bottomNavItems, type NavItem } from "@/config/navigation";
 import { useAuth } from "@/hooks/use-auth";
 import { useOrgStore } from "@/stores/org-store";
@@ -59,9 +59,14 @@ export function Sidebar() {
 
   function filterByRole(items: NavItem[]): NavItem[] {
     return items.filter((item) => {
-      if (!item.minRole) return true;
       if (!currentRole) return false;
-      return hasMinRole(currentRole, item.minRole);
+      if (item.permission && !hasPermission(currentRole, item.permission)) {
+        return false;
+      }
+      if (item.minRole && !hasMinRole(currentRole, item.minRole)) {
+        return false;
+      }
+      return true;
     });
   }
 

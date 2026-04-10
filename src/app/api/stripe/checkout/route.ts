@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
+import { hasPermission, type Role } from "@/config/roles";
 import {
   getOrCreateCustomer,
   createCheckoutSession,
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Price not configured" }, { status: 400 });
     }
 
-    // Verify user is admin/owner of the org
+    // Verify user can manage billing for the org
     const supabase = await getSupabaseServerClient();
     const { data: membership } = await supabase
       .from("org_memberships")
@@ -35,7 +36,7 @@ export async function POST(request: Request) {
       .eq("is_active", true)
       .single();
 
-    if (!membership || !["owner", "admin"].includes(membership.role)) {
+    if (!membership || !hasPermission(membership.role as Role, "org:billing")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

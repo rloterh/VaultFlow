@@ -27,7 +27,7 @@ export function RolePolicyMatrix({
         A shared view of who can operate, govern, and monitor the workspace.
       </CardDescription>
 
-      <div className={`mt-5 grid gap-4 ${compact ? "xl:grid-cols-2" : "xl:grid-cols-4"}`}>
+      <div className={`mt-5 grid gap-4 ${compact ? "xl:grid-cols-2 2xl:grid-cols-3" : "xl:grid-cols-3"}`}>
         {ROLE_HIERARCHY.slice().reverse().map((role) => {
           const metadata = ROLE_METADATA[role];
           const permissions = getRolePermissions(role);

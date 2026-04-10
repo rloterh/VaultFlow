@@ -10,8 +10,34 @@ import {
   Users,
 } from "lucide-react";
 import { ActionMenu } from "@/components/ui/action-menu";
+import { usePermissions } from "@/hooks/use-permissions";
 
 export function WorkspaceQuickActions() {
+  const { can, hasRole } = usePermissions();
+  const workspaceItems = [
+    {
+      label: "Activity log",
+      description: "Review tenant-wide operational changes.",
+      href: "/dashboard/activity",
+      icon: Activity,
+      visible: hasRole("manager"),
+    },
+    {
+      label: "Settings",
+      description: "Update organization profile and preferences.",
+      href: "/settings",
+      icon: Settings2,
+      visible: true,
+    },
+    {
+      label: "Billing",
+      description: "Manage plans, usage, and payment settings.",
+      href: "/settings/billing",
+      icon: CreditCard,
+      visible: can("org:billing"),
+    },
+  ].filter((item) => item.visible);
+
   return (
     <ActionMenu
       widthClassName="w-80"
@@ -59,36 +85,21 @@ export function WorkspaceQuickActions() {
               href: "/dashboard/clients",
               icon: Users,
             },
-            {
-              label: "Reports",
-              description: "Inspect financial trends and reporting views.",
-              href: "/dashboard/reports",
-              icon: BarChart3,
-            },
+            ...(can("reports:read")
+              ? [
+                  {
+                    label: "Reports",
+                    description: "Inspect financial trends and reporting views.",
+                    href: "/dashboard/reports",
+                    icon: BarChart3,
+                  },
+                ]
+              : []),
           ],
         },
         {
           label: "Workspace",
-          items: [
-            {
-              label: "Activity log",
-              description: "Review tenant-wide operational changes.",
-              href: "/dashboard/activity",
-              icon: Activity,
-            },
-            {
-              label: "Settings",
-              description: "Update organization profile and preferences.",
-              href: "/settings",
-              icon: Settings2,
-            },
-            {
-              label: "Billing",
-              description: "Manage plans, usage, and payment settings.",
-              href: "/settings/billing",
-              icon: CreditCard,
-            },
-          ],
+          items: workspaceItems,
         },
       ]}
     />

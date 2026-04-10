@@ -21,7 +21,7 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { useAuth } from "@/hooks/use-auth";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
-import { ROLE_METADATA } from "@/config/roles";
+import { ROLE_METADATA, hasMinRole } from "@/config/roles";
 import type { OrgMembership } from "@/types/auth";
 
 function fmt(n: number) {
@@ -43,6 +43,8 @@ function AdminContent() {
     revenue: 0,
     clients: 0,
     admins: 0,
+    operationalLeads: 0,
+    financeManagers: 0,
     pendingInvites: 0,
   });
 
@@ -90,6 +92,8 @@ function AdminContent() {
       admins: activeMembers.filter((member) =>
         ["owner", "admin"].includes(member.role)
       ).length,
+      operationalLeads: activeMembers.filter((member) => hasMinRole(member.role, "manager")).length,
+      financeManagers: activeMembers.filter((member) => member.role === "finance_manager").length,
       pendingInvites: invitesRes.count ?? 0,
     });
     setLoading(false);
@@ -98,16 +102,6 @@ function AdminContent() {
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
-
-  const roleBadgeVariant: Record<
-    string,
-    "info" | "success" | "warning" | "default"
-  > = {
-    owner: "info",
-    admin: "success",
-    manager: "warning",
-    member: "default",
-  };
 
   const columns: Column<OrgMembership>[] = [
     {
@@ -136,7 +130,7 @@ function AdminContent() {
       width: "120px",
       render: (row) => (
         <div className="space-y-1">
-          <Badge variant={roleBadgeVariant[row.role] ?? "default"}>{row.role}</Badge>
+          <Badge variant={ROLE_METADATA[row.role].badgeVariant}>{row.role}</Badge>
           <p className="text-xs text-neutral-400">{ROLE_METADATA[row.role].title}</p>
         </div>
       ),
@@ -225,10 +219,10 @@ function AdminContent() {
                 Governance
               </p>
               <p className="mt-2 text-sm font-medium text-neutral-900 dark:text-white">
-                {stats.admins} privileged admins
+                {stats.admins} privileged admin seat{stats.admins === 1 ? "" : "s"}
               </p>
               <p className="mt-1 text-xs text-neutral-500">
-                Owners and admins with billing and access control privileges.
+                Owners and admins with billing, access control, and governance authority.
               </p>
             </div>
             <div className="rounded-xl border border-neutral-200/80 bg-neutral-50 p-4 dark:border-neutral-800 dark:bg-neutral-800/30">
@@ -340,10 +334,18 @@ function AdminContent() {
             </div>
             <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
               <p className="font-medium text-neutral-900 dark:text-white">
-                {members.filter((member) => member.role === "manager").length} operational manager seat{members.filter((member) => member.role === "manager").length === 1 ? "" : "s"}
+                {stats.operationalLeads} operational lead seat{stats.operationalLeads === 1 ? "" : "s"}
               </p>
               <p className="mt-1 text-neutral-500">
-                Managers own day-to-day finance operations without the full admin blast radius.
+                Managers and finance managers keep day-to-day operations moving without full admin blast radius.
+              </p>
+            </div>
+            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+              <p className="font-medium text-neutral-900 dark:text-white">
+                {stats.financeManagers} finance manager seat{stats.financeManagers === 1 ? "" : "s"}
+              </p>
+              <p className="mt-1 text-neutral-500">
+                Billing-focused operators with export and recovery visibility but no people-admin rights.
               </p>
             </div>
             <Link

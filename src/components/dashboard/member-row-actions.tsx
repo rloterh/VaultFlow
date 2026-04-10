@@ -3,6 +3,7 @@
 import { ShieldAlert, ShieldCheck, Trash2, UserCog } from "lucide-react";
 import {
   ROLE_HIERARCHY,
+  ROLE_METADATA,
   canManageRole,
   type Role,
 } from "@/config/roles";
@@ -113,13 +114,8 @@ export function MemberRowActions({
         {
           label: "Role changes",
           items: assignableRoles.map((role) => ({
-            label: `Set role to ${role}`,
-            description:
-              role === "admin"
-                ? "Grant organization management and billing visibility."
-                : role === "manager"
-                  ? "Allow operational management without full admin access."
-                  : "Restrict access to standard collaboration and viewing.",
+            label: `Set role to ${ROLE_METADATA[role].title}`,
+            description: ROLE_METADATA[role].description,
             icon: role === "admin" ? ShieldCheck : ShieldAlert,
             onSelect: () => updateRole(role),
           })),

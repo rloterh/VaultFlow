@@ -14,7 +14,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
-import { ROLE_METADATA, type Role } from "@/config/roles";
+import { ROLE_HIERARCHY, ROLE_METADATA, hasMinRole, type Role } from "@/config/roles";
 
 type PendingInvite = {
   id: string;
@@ -22,13 +22,6 @@ type PendingInvite = {
   role: Role;
   expires_at: string;
   created_at: string;
-};
-
-const roleBadgeVariant: Record<Role, "info" | "success" | "warning" | "default"> = {
-  owner: "info",
-  admin: "success",
-  manager: "warning",
-  member: "default",
 };
 
 function formatInviteDate(value: string) {
@@ -53,8 +46,10 @@ function TeamContent() {
     const msUntilExpiry = new Date(invite.expires_at).getTime() - Date.now();
     return msUntilExpiry > 0 && msUntilExpiry <= 1000 * 60 * 60 * 24 * 3;
   }).length;
-  const managersPlus = members.filter((member) => ["manager", "admin", "owner"].includes(member.role)).length;
-  const membersOnly = members.filter((member) => member.role === "member").length;
+  const operationalLeads = members.filter((member) => hasMinRole(member.role, "manager")).length;
+  const financeManagers = members.filter((member) => member.role === "finance_manager").length;
+  const restrictedSeats = members.filter((member) => ["vendor", "viewer"].includes(member.role)).length;
+  const inviteableRoles = ROLE_HIERARCHY.slice().reverse().filter((role) => role !== "owner");
 
   const fetchData = useCallback(async () => {
     if (!currentOrg) {
@@ -198,9 +193,11 @@ function TeamContent() {
                 }
                 className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-white"
               >
-                <option value="member">Member</option>
-                <option value="manager">Manager</option>
-                <option value="admin">Admin</option>
+                {inviteableRoles.map((role) => (
+                  <option key={role} value={role}>
+                    {ROLE_METADATA[role].title}
+                  </option>
+                ))}
               </select>
             </div>
             <div className="flex justify-end">
@@ -229,7 +226,7 @@ function TeamContent() {
                       {invite.email}
                     </p>
                     <div className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
-                      <Badge variant={roleBadgeVariant[invite.role]}>{invite.role}</Badge>
+                      <Badge variant={ROLE_METADATA[invite.role].badgeVariant}>{invite.role}</Badge>
                       <span className="flex items-center gap-1">
                         <Clock3 className="h-3 w-3" />
                         Expires {formatInviteDate(invite.expires_at)}
@@ -269,7 +266,7 @@ function TeamContent() {
             Operator leads
           </p>
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
-            {managersPlus}
+            {operationalLeads}
           </p>
           <p className="mt-1 text-sm text-neutral-500">
             Seats with operational ownership or governance authority.
@@ -277,13 +274,24 @@ function TeamContent() {
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
-            Standard members
+            Finance managers
           </p>
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
-            {membersOnly}
+            {financeManagers}
           </p>
           <p className="mt-1 text-sm text-neutral-500">
-            Monitoring-oriented collaborators in the workspace.
+            Dedicated billing and reporting operators without people-admin authority.
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Restricted seats
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {restrictedSeats}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Vendor and viewer roles with intentionally narrower workspace access.
           </p>
         </Card>
       </div>
@@ -333,7 +341,7 @@ function TeamContent() {
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="text-right">
-                    <Badge variant={roleBadgeVariant[member.role]}>{member.role}</Badge>
+                    <Badge variant={ROLE_METADATA[member.role].badgeVariant}>{member.role}</Badge>
                     <p className="mt-1 text-xs text-neutral-400">
                       {ROLE_METADATA[member.role].title}
                     </p>

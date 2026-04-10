@@ -4,7 +4,7 @@ A production-grade, multi-tenant SaaS financial dashboard built with Next.js, Su
 
 ## Features
 
-- **Multi-tenant RBAC** — 4-role hierarchy (owner/admin/manager/member) with 18 granular permissions
+- **Multi-tenant RBAC** — 7-role hierarchy (owner/admin/finance_manager/manager/member/vendor/viewer) with granular permission mapping
 - **Real-time dashboard** — Revenue area chart, invoice status donut, metric cards with live Supabase subscriptions
 - **Invoice management** — Full CRUD with status lifecycle (draft → sent → viewed → paid → overdue), line items, and auto-total calculation
 - **PDF generation** — Branded A4 invoices with jsPDF, downloadable via API route
@@ -61,12 +61,13 @@ src/
 
 ## Database Schema
 
-3 SQL files across 4 phases:
+4 SQL files across 4 phases:
 
 | File | Tables | Features |
 |------|--------|----------|
 | `supabase-schema.sql` | organizations, profiles, org_memberships, org_invites | RBAC, auto-profile trigger, RLS |
 | `supabase-schema-v2.sql` | invoices, clients, line_items, activity_log | Auto-totals trigger, activity logging |
+| `supabase-schema-rbac-expansion.sql` | user_role enum + invoice/client policies | schema-backed finance manager, vendor, and viewer roles |
 | *(inline Phase 3)* | Stripe fields on organizations | subscription_id, customer_id |
 
 ## Quick Start
@@ -84,7 +85,8 @@ cp .env.example .env.local
 # Fill in Supabase + Stripe keys
 
 # 4. Database
-# Paste supabase-schema.sql then supabase-schema-v2.sql into Supabase SQL Editor
+# Apply the Phase 1 org/auth schema from doc/PHASE-1-GUIDE.md,
+# then paste supabase-schema-v2.sql and supabase-schema-rbac-expansion.sql into Supabase SQL Editor
 
 # 5. Stripe webhook
 # Point to /api/stripe/webhooks with events:
@@ -113,7 +115,19 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 NEXT_PUBLIC_APP_NAME=VaultFlow
 ```
 
-## RBAC Permission Matrix
+## RBAC Role Posture
+
+| Role | Core posture |
+|------|--------------|
+| Owner | Full governance, billing, team, and operational authority |
+| Admin | Workspace governance, billing, team lifecycle, and operations |
+| Finance Manager | Billing, recovery, exports, and invoice/client operational control |
+| Manager | Invoice/client operations and reporting without billing governance |
+| Member | Internal read-only collaboration across core workspace areas |
+| Vendor | Narrow invoice/client visibility for restricted external collaboration |
+| Viewer | Broad read-only oversight without billing or people-admin controls |
+
+Legacy four-role capability snapshot:
 
 | Permission | Owner | Admin | Manager | Member |
 |-----------|-------|-------|---------|--------|

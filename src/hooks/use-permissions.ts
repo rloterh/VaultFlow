@@ -32,7 +32,8 @@ export function usePermissions() {
       /** Quick role checks */
       isOwner: currentRole === "owner",
       isAdmin: currentRole === "admin" || currentRole === "owner",
-      isManager: hasMinRole(currentRole ?? "member", "manager"),
+      isFinanceManager: currentRole === "finance_manager",
+      isManager: hasMinRole(currentRole ?? "viewer", "manager"),
       isMember: !!currentRole,
     };
   }, [currentRole]);

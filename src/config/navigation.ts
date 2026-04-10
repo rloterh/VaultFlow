@@ -10,13 +10,14 @@ import {
   Activity,
   type LucideIcon,
 } from "lucide-react";
-import type { Role } from "./roles";
+import type { Permission, Role } from "./roles";
 
 export interface NavItem {
   title: string;
   href: string;
   icon: LucideIcon;
   minRole?: Role;
+  permission?: Permission;
   badge?: string;
   children?: NavItem[];
 }
@@ -42,7 +43,7 @@ export const mainNavItems: NavItem[] = [
     title: "Reports",
     href: "/dashboard/reports",
     icon: BarChart3,
-    minRole: "manager",
+    permission: "reports:read",
   },
   {
     title: "Activity",
@@ -66,7 +67,7 @@ export const bottomNavItems: NavItem[] = [
     children: [
       { title: "General", href: "/settings", icon: Building2 },
       { title: "Team", href: "/settings/team", icon: Users, minRole: "admin" },
-      { title: "Billing", href: "/settings/billing", icon: CreditCard, minRole: "admin" },
+      { title: "Billing", href: "/settings/billing", icon: CreditCard, permission: "org:billing" },
     ],
   },
 ];

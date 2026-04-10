@@ -5,6 +5,7 @@ import { ChevronDown, CreditCard, LayoutDashboard, LogOut, Settings2 } from "luc
 import { ActionMenu, type ActionMenuSection } from "@/components/ui/action-menu";
 import { Avatar } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
 
@@ -16,6 +17,7 @@ function planLabel(plan: string | undefined) {
 export function UserMenu() {
   const router = useRouter();
   const { profile, memberships, currentOrg, currentRole, signOut } = useAuth();
+  const { can } = usePermissions();
   const switchOrg = useOrgStore((s) => s.switchOrg);
   const addToast = useUIStore((s) => s.addToast);
 
@@ -58,8 +60,9 @@ export function UserMenu() {
           description: "Review subscription, usage, and payment settings.",
           href: "/settings/billing",
           icon: CreditCard,
+          hidden: !can("org:billing"),
         },
-      ],
+      ].filter((item) => !item.hidden),
     },
     {
       items: [

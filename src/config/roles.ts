@@ -3,7 +3,14 @@
 // Defines roles, permissions, and access levels
 // ============================================
 
-export type Role = "owner" | "admin" | "manager" | "member";
+export type Role =
+  | "owner"
+  | "admin"
+  | "finance_manager"
+  | "manager"
+  | "member"
+  | "vendor"
+  | "viewer";
 
 export type Permission =
   | "org:update"
@@ -51,6 +58,13 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "reports:read", "reports:export",
     "settings:read", "settings:update",
   ],
+  finance_manager: [
+    "org:billing",
+    "invoices:create", "invoices:read", "invoices:update", "invoices:send",
+    "clients:read", "clients:update",
+    "reports:read", "reports:export",
+    "settings:read",
+  ],
   manager: [
     "invoices:create", "invoices:read", "invoices:update", "invoices:send",
     "clients:create", "clients:read", "clients:update",
@@ -62,6 +76,15 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "clients:read",
     "reports:read",
     "settings:read",
+  ],
+  vendor: [
+    "invoices:read",
+    "clients:read",
+  ],
+  viewer: [
+    "invoices:read",
+    "clients:read",
+    "reports:read",
   ],
 };
 
@@ -86,6 +109,16 @@ export const ROLE_METADATA: Record<Role, RoleMetadata> = {
     ],
     badgeVariant: "success",
   },
+  finance_manager: {
+    title: "Finance Manager",
+    description: "Commercial operator focused on billing, cash collection, and reporting health.",
+    capabilities: [
+      "Manage billing and payment recovery workflows",
+      "Export financial reporting and monitor revenue posture",
+      "Update invoice and client records without full people admin powers",
+    ],
+    badgeVariant: "success",
+  },
   manager: {
     title: "Manager",
     description: "Hands-on operator focused on receivables, clients, and reporting.",
@@ -103,6 +136,26 @@ export const ROLE_METADATA: Record<Role, RoleMetadata> = {
       "Review invoices, clients, and reports",
       "Monitor workflow posture without changing state",
       "Access settings relevant to their account",
+    ],
+    badgeVariant: "default",
+  },
+  vendor: {
+    title: "Vendor",
+    description: "Restricted external-facing role with narrow visibility into relevant invoices and client records.",
+    capabilities: [
+      "Review invoice and client context relevant to ongoing work",
+      "Stay out of reporting, billing, and privileged admin controls",
+      "Operate with a minimal workspace footprint until vendor-specific assignment models ship",
+    ],
+    badgeVariant: "warning",
+  },
+  viewer: {
+    title: "Viewer",
+    description: "Read-only stakeholder role for oversight without operational mutation rights.",
+    capabilities: [
+      "Review dashboards, invoices, clients, and reporting posture",
+      "Monitor workspace health without changing operational state",
+      "Stay excluded from billing and member administration controls",
     ],
     badgeVariant: "default",
   },
@@ -167,7 +220,15 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
 };
 
 // Role hierarchy: higher index = higher authority
-export const ROLE_HIERARCHY: Role[] = ["member", "manager", "admin", "owner"];
+export const ROLE_HIERARCHY: Role[] = [
+  "viewer",
+  "vendor",
+  "member",
+  "manager",
+  "finance_manager",
+  "admin",
+  "owner",
+];
 
 export function hasPermission(role: Role, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
