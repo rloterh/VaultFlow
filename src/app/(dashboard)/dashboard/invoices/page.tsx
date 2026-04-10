@@ -13,6 +13,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useAuth } from "@/hooks/use-auth";
+import { usePermissions } from "@/hooks/use-permissions";
 import { recordActivity } from "@/lib/activity/log";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -55,6 +56,7 @@ export default function InvoicesPage() {
   const router = useRouter();
   const { currentOrg } = useOrgStore();
   const { user } = useAuth();
+  const { can } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -74,6 +76,7 @@ export default function InvoicesPage() {
     tax_rate: "0",
     notes: "",
   });
+  const canCreateInvoices = can("invoices:create");
 
   const fetchInvoices = useCallback(async () => {
     if (!currentOrg) {
@@ -122,6 +125,27 @@ export default function InvoicesPage() {
   }, [fetchInvoices]);
 
   useInvoiceRealtime(currentOrg?.id, fetchInvoices);
+
+  useEffect(() => {
+    if (!clients.length || typeof window === "undefined" || !canCreateInvoices) {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const clientId = params.get("clientId");
+    const compose = params.get("compose");
+
+    if (compose === "1") {
+      setComposerOpen(true);
+    }
+
+    if (clientId && clients.some((client) => client.id === clientId)) {
+      setDraftForm((current) => ({
+        ...current,
+        client_id: clientId,
+      }));
+    }
+  }, [canCreateInvoices, clients]);
 
   async function createDraftInvoice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -323,12 +347,14 @@ export default function InvoicesPage() {
             Create, reconcile, and operationalize your receivables workflow.
           </p>
         </div>
-        <Button
-          leftIcon={<Plus className="h-4 w-4" />}
-          onClick={() => setComposerOpen((current) => !current)}
-        >
-          {composerOpen ? "Close composer" : "Create draft"}
-        </Button>
+        {canCreateInvoices && (
+          <Button
+            leftIcon={<Plus className="h-4 w-4" />}
+            onClick={() => setComposerOpen((current) => !current)}
+          >
+            {composerOpen ? "Close composer" : "Create draft"}
+          </Button>
+        )}
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -378,7 +404,7 @@ export default function InvoicesPage() {
         </Card>
       </div>
 
-      {composerOpen && (
+      {composerOpen && canCreateInvoices && (
         <Card>
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-neutral-400" />
@@ -517,8 +543,8 @@ export default function InvoicesPage() {
             icon={FileText}
             title="No invoices yet"
             description="Create your first invoice to start tracking revenue."
-            actionLabel="Create draft"
-            onAction={() => setComposerOpen(true)}
+            actionLabel={canCreateInvoices ? "Create draft" : undefined}
+            onAction={canCreateInvoices ? () => setComposerOpen(true) : undefined}
           />
         }
         toolbar={

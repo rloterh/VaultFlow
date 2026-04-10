@@ -36,6 +36,7 @@ const activityConfig: Record<
   "invoice.deleted": { label: "Deleted invoice", icon: Trash2, tone: "danger" },
   "client.created": { label: "Added client", icon: Users },
   "client.updated": { label: "Updated client", icon: Edit },
+  "client.archived": { label: "Archived client", icon: Trash2, tone: "danger" },
   "member.invited": { label: "Invited member", icon: UserPlus, tone: "info" },
   "member.removed": { label: "Removed member", icon: Trash2, tone: "danger" },
   "member.role_changed": { label: "Changed role", icon: Users },

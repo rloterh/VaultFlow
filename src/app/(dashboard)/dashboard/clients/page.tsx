@@ -11,16 +11,28 @@ import {
   Users,
 } from "lucide-react";
 import { ClientRowActions } from "@/components/dashboard/client-row-actions";
-import { Avatar } from "@/components/ui/badge";
+import { Avatar, Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { useAuth } from "@/hooks/use-auth";
+import { usePermissions } from "@/hooks/use-permissions";
+import { recordActivity } from "@/lib/activity/log";
+import {
+  buildClientFinancialSnapshot,
+  buildClientInsightMap,
+  type ClientFinancialSnapshot,
+} from "@/lib/clients/insights";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
-import type { Client } from "@/types/database";
+import type { Client, Invoice } from "@/types/database";
+
+type ClientOperationalRow = Client & {
+  snapshot: ClientFinancialSnapshot;
+};
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", {
@@ -30,10 +42,21 @@ function fmt(n: number) {
   }).format(n);
 }
 
+function fmtDate(value: string | null) {
+  if (!value) return "No invoice history";
+  return new Date(value).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export default function ClientsPage() {
   const { currentOrg } = useOrgStore();
+  const { user } = useAuth();
+  const { can } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
-  const [clients, setClients] = useState<Client[]>([]);
+  const [clients, setClients] = useState<ClientOperationalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -45,20 +68,36 @@ export default function ClientsPage() {
     country: "US",
   });
 
+  const canCreateClients = can("clients:create");
+
   const fetchClients = useCallback(async () => {
     if (!currentOrg) {
       return;
     }
 
     const sb = getSupabaseBrowserClient();
-    const { data } = await sb
-      .from("clients")
-      .select("*")
-      .eq("org_id", currentOrg.id)
-      .eq("is_active", true)
-      .order("total_revenue", { ascending: false });
+    const [clientRes, invoiceRes] = await Promise.all([
+      sb
+        .from("clients")
+        .select("*")
+        .eq("org_id", currentOrg.id)
+        .eq("is_active", true)
+        .order("total_revenue", { ascending: false }),
+      sb
+        .from("invoices")
+        .select("id, client_id, status, total, issue_date, due_date")
+        .eq("org_id", currentOrg.id),
+    ]);
 
-    setClients((data ?? []) as Client[]);
+    const insightMap = buildClientInsightMap((invoiceRes.data ?? []) as Invoice[]);
+    const nextClients = ((clientRes.data ?? []) as Client[]).map((client) => ({
+      ...client,
+      snapshot:
+        insightMap.get(client.id) ??
+        buildClientFinancialSnapshot([]),
+    }));
+
+    setClients(nextClients);
     setLoading(false);
   }, [currentOrg]);
 
@@ -69,20 +108,24 @@ export default function ClientsPage() {
   async function createClient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!currentOrg) {
+    if (!currentOrg || !user) {
       return;
     }
 
     setSaving(true);
     const sb = getSupabaseBrowserClient();
-    const { error } = await sb.from("clients").insert({
-      org_id: currentOrg.id,
-      name: clientForm.name,
-      email: clientForm.email,
-      company: clientForm.company || null,
-      city: clientForm.city || null,
-      country: clientForm.country,
-    });
+    const { data, error } = await sb
+      .from("clients")
+      .insert({
+        org_id: currentOrg.id,
+        name: clientForm.name,
+        email: clientForm.email,
+        company: clientForm.company || null,
+        city: clientForm.city || null,
+        country: clientForm.country,
+      })
+      .select("id")
+      .single();
 
     if (error) {
       addToast({
@@ -99,6 +142,17 @@ export default function ClientsPage() {
       title: "Client added",
       description: `${clientForm.name} is now available for invoicing.`,
     });
+    await recordActivity({
+      orgId: currentOrg.id,
+      userId: user.id,
+      entityType: "client",
+      entityId: data.id,
+      action: "client.created",
+      metadata: {
+        client_name: clientForm.name,
+        email: clientForm.email,
+      },
+    });
     setSaving(false);
     setComposerOpen(false);
     setClientForm({
@@ -112,21 +166,24 @@ export default function ClientsPage() {
   }
 
   const metrics = useMemo(() => {
+    const totalRevenue = clients.reduce(
+      (sum, client) => sum + Number(client.total_revenue),
+      0
+    );
+    const openExposure = clients.reduce(
+      (sum, client) => sum + client.snapshot.pendingTotal + client.snapshot.overdueTotal,
+      0
+    );
+    const atRisk = clients.filter((client) => client.snapshot.health === "at-risk").length;
     return {
       total: clients.length,
-      revenue: clients.reduce(
-        (sum, client) => sum + Number(client.total_revenue),
-        0
-      ),
-      avgRevenue:
-        clients.length > 0
-          ? clients.reduce((sum, client) => sum + Number(client.total_revenue), 0) /
-            clients.length
-          : 0,
+      revenue: totalRevenue,
+      openExposure,
+      atRisk,
     };
   }, [clients]);
 
-  const columns: Column<Client>[] = [
+  const columns: Column<ClientOperationalRow>[] = [
     {
       key: "name",
       header: "Client",
@@ -146,6 +203,20 @@ export default function ClientsPage() {
             )}
           </div>
         </Link>
+      ),
+    },
+    {
+      key: "health",
+      header: "Health",
+      sortable: true,
+      width: "140px",
+      render: (row) => (
+        <div className="space-y-1">
+          <Badge variant={row.snapshot.healthVariant}>{row.snapshot.healthLabel}</Badge>
+          <p className="text-xs text-neutral-500">
+            {row.snapshot.openInvoices} open
+          </p>
+        </div>
       ),
     },
     {
@@ -172,20 +243,25 @@ export default function ClientsPage() {
               {row.city}, {row.country}
             </>
           ) : (
-            "—"
+            "-"
           )}
         </span>
       ),
     },
     {
-      key: "invoice_count",
-      header: "Invoices",
+      key: "open_balance",
+      header: "Open balance",
       sortable: true,
-      width: "100px",
+      width: "140px",
       render: (row) => (
-        <span className="text-neutral-600 dark:text-neutral-400">
-          {row.invoice_count}
-        </span>
+        <div>
+          <p className="font-medium text-neutral-900 dark:text-white">
+            {fmt(row.snapshot.pendingTotal + row.snapshot.overdueTotal)}
+          </p>
+          <p className="text-xs text-neutral-500">
+            Next due {fmtDate(row.snapshot.nextDueDate)}
+          </p>
+        </div>
       ),
     },
     {
@@ -220,18 +296,20 @@ export default function ClientsPage() {
             Clients
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Manage account relationships, revenue concentration, and billing contacts.
+            Manage account relationships, revenue concentration, and collections posture.
           </p>
         </div>
-        <Button
-          leftIcon={<Plus className="h-4 w-4" />}
-          onClick={() => setComposerOpen((current) => !current)}
-        >
-          {composerOpen ? "Close form" : "Add client"}
-        </Button>
+        {canCreateClients && (
+          <Button
+            leftIcon={<Plus className="h-4 w-4" />}
+            onClick={() => setComposerOpen((current) => !current)}
+          >
+            {composerOpen ? "Close form" : "Add client"}
+          </Button>
+        )}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
             Active accounts
@@ -239,7 +317,9 @@ export default function ClientsPage() {
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
             {metrics.total}
           </p>
-          <p className="mt-1 text-sm text-neutral-500">Clients currently in the operating roster.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Clients currently in the operating roster.
+          </p>
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
@@ -248,20 +328,35 @@ export default function ClientsPage() {
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
             {fmt(metrics.revenue)}
           </p>
-          <p className="mt-1 text-sm text-neutral-500">Total revenue concentration across this workspace.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Total revenue concentration across this workspace.
+          </p>
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
-            Average account value
+            Open exposure
           </p>
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
-            {fmt(metrics.avgRevenue)}
+            {fmt(metrics.openExposure)}
           </p>
-          <p className="mt-1 text-sm text-neutral-500">Helpful signal for segmenting enterprise follow-up.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Receivables still moving through collections.
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            At-risk accounts
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {metrics.atRisk}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Accounts with overdue balances needing follow-up.
+          </p>
         </Card>
       </div>
 
-      {composerOpen && (
+      {composerOpen && canCreateClients && (
         <Card>
           <CardTitle>New client record</CardTitle>
           <CardDescription>
@@ -303,7 +398,10 @@ export default function ClientsPage() {
               label="Country"
               value={clientForm.country}
               onChange={(event) =>
-                setClientForm((current) => ({ ...current, country: event.target.value.toUpperCase() }))
+                setClientForm((current) => ({
+                  ...current,
+                  country: event.target.value.toUpperCase(),
+                }))
               }
               hint="Use ISO country codes where possible, for example US, GB, or AE."
             />
@@ -327,9 +425,13 @@ export default function ClientsPage() {
           <EmptyState
             icon={Users}
             title="No clients yet"
-            description="Add your first client to start sending invoices."
-            actionLabel="Add client"
-            onAction={() => setComposerOpen(true)}
+            description={
+              canCreateClients
+                ? "Add your first client to start sending invoices."
+                : "Client accounts will appear here as your team adds them."
+            }
+            actionLabel={canCreateClients ? "Add client" : undefined}
+            onAction={canCreateClients ? () => setComposerOpen(true) : undefined}
           />
         }
       />
