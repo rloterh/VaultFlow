@@ -59,6 +59,10 @@ import {
   type ReportRange,
 } from "@/lib/reports/analytics";
 import { exportInvoicesReport } from "@/lib/reports/export";
+import {
+  buildClientOpsViewHref,
+  getClientOpsViewForQueuePreset,
+} from "@/lib/operations/client-views";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { useOrgStore } from "@/stores/org-store";
@@ -335,6 +339,9 @@ function ReportsContent() {
   const collectionsQueue = buildCollectionsQueue(report.invoices, reminders);
   const queueSummary = summarizeCollectionsQueue(collectionsQueue);
   const visibleQueue = filterCollectionsQueue(collectionsQueue, queuePreset);
+  const matchingClientViewHref = buildClientOpsViewHref(
+    getClientOpsViewForQueuePreset(queuePreset)
+  );
 
   reminders.forEach((entry) => {
     if (!reminderLookup.has(entry.entity_id)) {
@@ -590,6 +597,12 @@ function ReportsContent() {
                     </button>
                   ))}
                 </div>
+                <Link
+                  href={matchingClientViewHref}
+                  className="inline-flex text-sm font-medium text-neutral-900 dark:text-white"
+                >
+                  Open matching client view
+                </Link>
                 {visibleQueue.length === 0 ? (
                   <p className="py-6 text-center text-sm text-neutral-400">
                     No open receivables are showing up for this queue preset.

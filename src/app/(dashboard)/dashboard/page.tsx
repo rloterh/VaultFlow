@@ -33,6 +33,10 @@ import {
   canRecordReminder,
   recordInvoiceReminder,
 } from "@/lib/invoices/follow-up";
+import {
+  buildClientOpsViewHref,
+  getClientOpsViewForQueuePreset,
+} from "@/lib/operations/client-views";
 import { buildReportSnapshot } from "@/lib/reports/analytics";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -156,6 +160,10 @@ export default function DashboardPage() {
     () => summarizeCollectionsQueue(collectionsQueue),
     [collectionsQueue]
   );
+  const queueClientOpsHref = useMemo(
+    () => buildClientOpsViewHref(getClientOpsViewForQueuePreset(queuePreset)),
+    [queuePreset]
+  );
   const visibleQueue = useMemo(
     () => filterCollectionsQueue(collectionsQueue, queuePreset).slice(0, 4),
     [collectionsQueue, queuePreset]
@@ -224,8 +232,8 @@ export default function DashboardPage() {
               ? `${queueSummary.needsTouch} invoices currently need a collections touchpoint.`
               : "Receivables are moving cleanly with no urgent collections work right now."}
           </p>
-          <Link href="/dashboard/reports" className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
-            Review operations
+          <Link href={queueClientOpsHref} className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+            Open client workspace
           </Link>
         </Card>
         <Card>
@@ -238,7 +246,7 @@ export default function DashboardPage() {
               ? `${fmt(biggestExposure.total_revenue)} billed across ${biggestExposure.invoice_count} invoices in the current reporting pulse.`
               : "Once invoices are active, the dashboard will highlight the account with the heaviest billed activity."}
           </p>
-          <Link href="/dashboard/clients" className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+          <Link href={buildClientOpsViewHref("all-accounts")} className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
             Open client ops
           </Link>
         </Card>
@@ -437,6 +445,12 @@ export default function DashboardPage() {
                     ))
                   )}
                 </div>
+                <Link
+                  href={buildClientOpsViewHref("at-risk-accounts")}
+                  className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white"
+                >
+                  Open at-risk accounts
+                </Link>
               </div>
               <div className="rounded-xl border border-neutral-200/70 p-4 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
                 {permissions.can("invoices:update")

@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { CollectionsQueuePreset } from "@/lib/collections/queue";
+import {
+  DEFAULT_CLIENT_OPS_VIEW,
+  type ClientOpsViewId,
+} from "@/lib/operations/client-views";
 
 export interface Toast {
   id: string;
@@ -25,6 +29,8 @@ interface UIState {
   // Operations workspace
   collectionsPreset: CollectionsQueuePreset;
   setCollectionsPreset: (preset: CollectionsQueuePreset) => void;
+  clientOpsView: ClientOpsViewId;
+  setClientOpsView: (view: ClientOpsViewId) => void;
 
   // Toasts
   toasts: Toast[];
@@ -56,6 +62,8 @@ export const useUIStore = create<UIState>()(
       // Operations workspace
       collectionsPreset: "needs-touch",
       setCollectionsPreset: (preset) => set({ collectionsPreset: preset }),
+      clientOpsView: DEFAULT_CLIENT_OPS_VIEW,
+      setClientOpsView: (view) => set({ clientOpsView: view }),
 
       // Toasts
       toasts: [],
@@ -83,6 +91,7 @@ export const useUIStore = create<UIState>()(
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,
         collectionsPreset: state.collectionsPreset,
+        clientOpsView: state.clientOpsView,
       }),
     }
   )
