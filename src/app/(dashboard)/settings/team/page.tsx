@@ -21,6 +21,7 @@ import {
 import {
   fetchVendorAssignmentsForOrg,
 } from "@/lib/rbac/vendor-access";
+import { recordActivity } from "@/lib/activity/log";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -177,6 +178,17 @@ function TeamContent() {
       title: "Invite created",
       description: `An invitation for ${inviteForm.email} is ready to be sent.`,
     });
+    await recordActivity({
+      orgId: currentOrg.id,
+      userId: user.id,
+      entityType: "member",
+      entityId: currentOrg.id,
+      action: "member.invited",
+      metadata: {
+        email: normalizedEmail,
+        role: inviteForm.role,
+      },
+    });
     setInviteForm({ email: "", role: "member" });
     setInviteLoading(false);
     await fetchData();
@@ -306,7 +318,7 @@ function TeamContent() {
             {members.length} active members
           </p>
           <p className="mt-1 text-xs text-neutral-500">
-            {pendingInvites.length} pending invite{pendingInvites.length === 1 ? "" : "s"} · {currentRole} access
+            {pendingInvites.length} pending invite{pendingInvites.length === 1 ? "" : "s"} - {currentRole} access
           </p>
         </div>
       </div>
@@ -605,6 +617,7 @@ function TeamContent() {
                   <MemberRowActions
                     membership={member}
                     actorRole={currentRole}
+                    orgId={currentOrg?.id}
                     actorUserId={user?.id}
                     onUpdated={fetchData}
                   />

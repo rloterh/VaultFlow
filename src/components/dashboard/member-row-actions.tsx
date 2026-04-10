@@ -7,6 +7,7 @@ import {
   type Role,
 } from "@/config/roles";
 import { ActionMenu } from "@/components/ui/action-menu";
+import { recordActivity } from "@/lib/activity/log";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useUIStore } from "@/stores/ui-store";
 import type { OrgMembership } from "@/types/auth";
@@ -14,6 +15,7 @@ import type { OrgMembership } from "@/types/auth";
 interface MemberRowActionsProps {
   membership: OrgMembership;
   actorRole: Role | null;
+  orgId?: string | null;
   actorUserId?: string;
   onUpdated: () => void | Promise<void>;
 }
@@ -21,6 +23,7 @@ interface MemberRowActionsProps {
 export function MemberRowActions({
   membership,
   actorRole,
+  orgId,
   actorUserId,
   onUpdated,
 }: MemberRowActionsProps) {
@@ -66,6 +69,23 @@ export function MemberRowActions({
       title: "Role updated",
       description: `${membership.profile?.full_name || membership.profile?.email || "Member"} is now ${role}.`,
     });
+
+    if (orgId) {
+      await recordActivity({
+        orgId,
+        userId: actorUserId,
+        entityType: "member",
+        entityId: membership.id,
+        action: "member.role_changed",
+        metadata: {
+          email: membership.profile?.email ?? null,
+          name: membership.profile?.full_name ?? null,
+          previous_role: membership.role,
+          role,
+        },
+      });
+    }
+
     await onUpdated();
   }
 
@@ -98,6 +118,22 @@ export function MemberRowActions({
       title: "Member removed",
       description: `${membership.profile?.full_name || membership.profile?.email || "Member"} no longer has workspace access.`,
     });
+
+    if (orgId) {
+      await recordActivity({
+        orgId,
+        userId: actorUserId,
+        entityType: "member",
+        entityId: membership.id,
+        action: "member.removed",
+        metadata: {
+          email: membership.profile?.email ?? null,
+          name: membership.profile?.full_name ?? null,
+          role: membership.role,
+        },
+      });
+    }
+
     await onUpdated();
   }
 
@@ -113,7 +149,7 @@ export function MemberRowActions({
           items: [
             {
               label: "Review member access",
-              description: `${membership.role} · joined ${new Date(membership.joined_at).toLocaleDateString("en-GB")}`,
+              description: `${membership.role} - joined ${new Date(membership.joined_at).toLocaleDateString("en-GB")}`,
               icon: UserCog,
               disabled: true,
             },

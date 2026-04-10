@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { cn } from "@/lib/utils/cn";
 import type { HTMLAttributes } from "react";
 
@@ -72,10 +73,23 @@ export function Avatar({ src, name, size = "md", className, ...props }: AvatarPr
   if (src) {
     return (
       <div
-        className={cn("overflow-hidden rounded-full", sizeClasses, className)}
+        className={cn(
+          "relative overflow-hidden rounded-full",
+          sizeClasses,
+          className
+        )}
         {...props}
       >
-        <img src={src} alt={name ?? "Avatar"} className="h-full w-full object-cover" />
+        <Image
+          src={src}
+          alt={name ?? "Avatar"}
+          fill
+          sizes={
+            size === "sm" ? "28px" : size === "md" ? "36px" : "48px"
+          }
+          unoptimized
+          className="object-cover"
+        />
       </div>
     );
   }

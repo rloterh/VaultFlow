@@ -1,21 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Activity } from "lucide-react";
+import { Activity, AlertTriangle, CreditCard, Shield } from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   getActivityIcon,
   getActivityLabel,
   getActivitySubject,
   getActivityTone,
 } from "@/lib/activity/presentation";
+import {
+  isBillingControlActivityAction,
+  isGovernanceActivityAction,
+} from "@/lib/admin/governance";
 import { isCollectionsActivityAction } from "@/lib/invoices/follow-up";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import { useOrgStore } from "@/stores/org-store";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 interface ActivityEntry {
   id: string;
@@ -28,6 +32,16 @@ interface ActivityEntry {
   created_at: string;
   profile?: { full_name: string | null; email: string | null };
 }
+
+type ActivityScope =
+  | "all"
+  | "invoice"
+  | "collections"
+  | "workflow"
+  | "client"
+  | "member"
+  | "billing"
+  | "governance";
 
 function formatRelativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -44,13 +58,27 @@ function formatRelativeTime(dateStr: string): string {
   });
 }
 
+function isWorkflowAction(action: string) {
+  return [
+    "invoice.created",
+    "invoice.reminder_sent",
+    "invoice.sent",
+    "invoice.viewed",
+    "invoice.overdue",
+    "invoice.paid",
+    "invoice.cancelled",
+    "invoice.recovery_reviewed",
+    "payment_refund_requested",
+    "invoice.credit_requested",
+    "invoice.void_requested",
+  ].includes(action);
+}
+
 function ActivityPageContent() {
   const { currentOrg } = useOrgStore();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [scope, setScope] = useState<
-    "all" | "invoice" | "collections" | "workflow" | "client" | "member" | "billing"
-  >("all");
+  const [scope, setScope] = useState<ActivityScope>("all");
 
   useEffect(() => {
     async function fetch() {
@@ -61,43 +89,103 @@ function ActivityPageContent() {
         .select("*, profile:profiles(full_name, email)")
         .eq("org_id", currentOrg.id)
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(100);
       setEntries((data ?? []) as ActivityEntry[]);
       setLoading(false);
     }
     void fetch();
   }, [currentOrg]);
 
-  const filteredEntries = entries.filter((entry) => {
-    if (scope === "all") return true;
-    if (scope === "collections") return isCollectionsActivityAction(entry.action);
-    if (scope === "workflow") {
-      return (
-        entry.entity_type === "invoice" &&
-        [
-          "invoice.created",
-          "invoice.reminder_sent",
-          "invoice.sent",
-          "invoice.viewed",
-          "invoice.overdue",
-          "invoice.paid",
-          "invoice.cancelled",
-        ].includes(entry.action)
-      );
-    }
-    return entry.entity_type === scope;
-  });
-
-  const workflowAccountability = buildWorkflowAccountabilityMap(
-    filteredEntries
-      .filter((entry): entry is ActivityEntry & { entity_id: string } => Boolean(entry.entity_id))
-      .map((entry) => ({
-        entity_id: entry.entity_id,
-        action: entry.action,
-        created_at: entry.created_at,
-        profile: entry.profile ? { full_name: entry.profile.full_name } : null,
-      }))
+  const filteredEntries = useMemo(
+    () =>
+      entries.filter((entry) => {
+        if (scope === "all") return true;
+        if (scope === "collections") return isCollectionsActivityAction(entry.action);
+        if (scope === "workflow") {
+          return entry.entity_type === "invoice" && isWorkflowAction(entry.action);
+        }
+        if (scope === "billing") {
+          return isBillingControlActivityAction(entry.action, entry.entity_type);
+        }
+        if (scope === "governance") {
+          return isGovernanceActivityAction(entry.action, entry.entity_type);
+        }
+        return entry.entity_type === scope;
+      }),
+    [entries, scope]
   );
+
+  const workflowAccountability = useMemo(
+    () =>
+      buildWorkflowAccountabilityMap(
+        filteredEntries
+          .filter((entry): entry is ActivityEntry & { entity_id: string } => Boolean(entry.entity_id))
+          .map((entry) => ({
+            entity_id: entry.entity_id,
+            action: entry.action,
+            created_at: entry.created_at,
+            profile: entry.profile ? { full_name: entry.profile.full_name } : null,
+          }))
+      ),
+    [filteredEntries]
+  );
+
+  const summaryCards = useMemo(() => {
+    const last14Days = Date.now() - 1000 * 60 * 60 * 24 * 14;
+    const recentEntries = entries.filter(
+      (entry) => new Date(entry.created_at).getTime() >= last14Days
+    );
+    const governanceCount = recentEntries.filter((entry) =>
+      isGovernanceActivityAction(entry.action, entry.entity_type)
+    ).length;
+    const billingExceptions = recentEntries.filter((entry) =>
+      ["payment_failed", "subscription_cancelled", "invoice.voided"].includes(entry.action)
+    ).length;
+    const recoveryReviews = recentEntries.filter(
+      (entry) => entry.action === "invoice.recovery_reviewed"
+    ).length;
+    const privilegeChanges = recentEntries.filter((entry) =>
+      ["member.role_changed", "member.removed"].includes(entry.action)
+    ).length;
+
+    return [
+      {
+        label: "Governance actions",
+        value: String(governanceCount),
+        detail: "Role, invite, and org-setting events in the last 14 days.",
+        icon: Shield,
+      },
+      {
+        label: "Billing exceptions",
+        value: String(billingExceptions),
+        detail: "Failures, cancellations, or void activity worth audit review.",
+        icon: AlertTriangle,
+      },
+      {
+        label: "Recovery reviews",
+        value: String(recoveryReviews),
+        detail: "Invoice recovery reviews logged during the same audit window.",
+        icon: CreditCard,
+      },
+      {
+        label: "Privileged changes",
+        value: String(privilegeChanges),
+        detail: "Member removals and role shifts that changed access posture.",
+        icon: Activity,
+      },
+    ];
+  }, [entries]);
+
+  const scopeFilters: Array<{ label: string; value: ActivityScope }> = [
+    { label: "All activity", value: "all" },
+    { label: "Invoices", value: "invoice" },
+    { label: "Collections", value: "collections" },
+    { label: "Workflow", value: "workflow" },
+    { label: "Clients", value: "client" },
+    { label: "Members", value: "member" },
+    { label: "Billing", value: "billing" },
+    { label: "Governance", value: "governance" },
+  ];
 
   return (
     <motion.div
@@ -110,20 +198,33 @@ function ActivityPageContent() {
           Activity log
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Recent actions across your organization.
+          Review workflow, billing, and governance actions across your organization.
         </p>
       </div>
 
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {summaryCards.map((card) => {
+          const Icon = card.icon;
+
+          return (
+            <Card key={card.label}>
+              <div className="flex items-center gap-2">
+                <Icon className="h-4 w-4 text-neutral-500" />
+                <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                  {card.label}
+                </p>
+              </div>
+              <p className="mt-4 text-2xl font-semibold text-neutral-900 dark:text-white">
+                {card.value}
+              </p>
+              <p className="mt-2 text-sm text-neutral-500">{card.detail}</p>
+            </Card>
+          );
+        })}
+      </div>
+
       <div className="flex flex-wrap gap-2">
-        {[
-          { label: "All activity", value: "all" as const },
-          { label: "Invoices", value: "invoice" as const },
-          { label: "Collections", value: "collections" as const },
-          { label: "Workflow", value: "workflow" as const },
-          { label: "Clients", value: "client" as const },
-          { label: "Members", value: "member" as const },
-          { label: "Billing", value: "billing" as const },
-        ].map((filter) => (
+        {scopeFilters.map((filter) => (
           <button
             key={filter.value}
             type="button"
@@ -194,9 +295,9 @@ function ActivityPageContent() {
                       <p className="mt-1 text-xs text-neutral-500">
                         {typeof entry.metadata.reminder_stage === "string"
                           ? `${entry.metadata.reminder_stage.replace("-", " ")} follow-up`
-                          : "Collections follow-up"}{" "}
+                          : "Collections follow-up"}
                         {typeof entry.metadata.outstanding_balance === "number"
-                          ? `· $${Math.round(entry.metadata.outstanding_balance).toLocaleString("en-US")} outstanding`
+                          ? ` - $${Math.round(entry.metadata.outstanding_balance).toLocaleString("en-US")} outstanding`
                           : ""}
                       </p>
                     )}
@@ -206,14 +307,20 @@ function ActivityPageContent() {
                           ? `Owner: ${accountability.ownerName}`
                           : "No workflow owner recorded yet"}
                         {accountability?.lastTouchedAt
-                          ? ` · Last touch ${formatRelativeTime(accountability.lastTouchedAt)}`
+                          ? ` - Last touch ${formatRelativeTime(accountability.lastTouchedAt)}`
                           : ""}
                       </p>
                     )}
                   </div>
                   {color && (
                     <Badge variant={color} className="mt-1 shrink-0 capitalize">
-                      {scope === "collections" ? "collections" : scope === "workflow" ? "workflow" : entry.entity_type}
+                      {scope === "collections"
+                        ? "collections"
+                        : scope === "workflow"
+                          ? "workflow"
+                          : scope === "governance"
+                            ? "governance"
+                            : entry.entity_type}
                     </Badge>
                   )}
                 </div>

@@ -1,6 +1,17 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import type { Invoice, InvoiceItem } from "@/types/database";
+import type { Client, Invoice, InvoiceItem } from "@/types/database";
+
+type InvoicePdfRecord = Omit<Invoice, "client" | "items"> & {
+  client?: Client | null;
+  items?: InvoiceItem[];
+};
+
+type AutoTableDoc = jsPDF & {
+  lastAutoTable?: {
+    finalY: number;
+  };
+};
 
 function fmt(n: number) {
   return new Intl.NumberFormat("en-US", {
@@ -18,20 +29,15 @@ function fmtDate(d: string) {
 }
 
 export function generateInvoicePDF(
-  invoice: Invoice,
+  invoice: InvoicePdfRecord,
   orgName: string = "VaultFlow"
 ): Buffer {
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const doc = new jsPDF({ unit: "mm", format: "a4" }) as AutoTableDoc;
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 20;
   const contentWidth = pageWidth - margin * 2;
   let y = margin;
 
-  // ============================================
-  // HEADER
-  // ============================================
-
-  // Logo / Brand
   doc.setFillColor(23, 23, 23);
   doc.rect(margin, y, 10, 10, "F");
   doc.setTextColor(255, 255, 255);
@@ -44,17 +50,12 @@ export function generateInvoicePDF(
   doc.setFont("helvetica", "bold");
   doc.text(orgName, margin + 14, y + 7);
 
-  // Invoice label
   doc.setFontSize(28);
   doc.setTextColor(163, 163, 163);
   doc.setFont("helvetica", "bold");
   doc.text("INVOICE", pageWidth - margin, y + 7, { align: "right" });
 
   y += 20;
-
-  // ============================================
-  // INVOICE INFO
-  // ============================================
 
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
@@ -73,8 +74,7 @@ export function generateInvoicePDF(
   doc.text(fmtDate(invoice.issue_date), margin + 50, y);
   doc.text(fmtDate(invoice.due_date), margin + 100, y);
 
-  // Status badge
-  const statusColors: Record<string, [number, number, number]> = {
+  const statusColors: Record<Invoice["status"], [number, number, number]> = {
     draft: [163, 163, 163],
     sent: [59, 130, 246],
     paid: [16, 185, 129],
@@ -85,27 +85,19 @@ export function generateInvoicePDF(
   const statusColor = statusColors[invoice.status] ?? [163, 163, 163];
   doc.setTextColor(...statusColor);
   doc.setFont("helvetica", "bold");
-  doc.text(
-    invoice.status.toUpperCase(),
-    pageWidth - margin,
-    y,
-    { align: "right" }
-  );
+  doc.text(invoice.status.toUpperCase(), pageWidth - margin, y, {
+    align: "right",
+  });
 
   y += 12;
 
-  // Divider
   doc.setDrawColor(229, 229, 229);
   doc.setLineWidth(0.3);
   doc.line(margin, y, pageWidth - margin, y);
 
   y += 10;
 
-  // ============================================
-  // BILL TO
-  // ============================================
-
-  const client = invoice.client as any;
+  const client = invoice.client;
 
   doc.setFontSize(8);
   doc.setTextColor(115, 115, 115);
@@ -116,7 +108,7 @@ export function generateInvoicePDF(
   doc.setFontSize(11);
   doc.setTextColor(23, 23, 23);
   doc.setFont("helvetica", "bold");
-  doc.text(client?.name ?? "—", margin, y);
+  doc.text(client?.name ?? "-", margin, y);
 
   y += 5;
   doc.setFontSize(9);
@@ -141,11 +133,7 @@ export function generateInvoicePDF(
 
   y += 8;
 
-  // ============================================
-  // LINE ITEMS TABLE
-  // ============================================
-
-  const items = (invoice.items ?? []) as InvoiceItem[];
+  const items = invoice.items ?? [];
   const tableBody = items
     .sort((a, b) => a.sort_order - b.sort_order)
     .map((item) => [
@@ -177,17 +165,16 @@ export function generateInvoicePDF(
       0: { cellWidth: contentWidth * 0.5 },
       1: { cellWidth: contentWidth * 0.1, halign: "right" },
       2: { cellWidth: contentWidth * 0.2, halign: "right" },
-      3: { cellWidth: contentWidth * 0.2, halign: "right", fontStyle: "bold" },
+      3: {
+        cellWidth: contentWidth * 0.2,
+        halign: "right",
+        fontStyle: "bold",
+      },
     },
     margin: { left: margin, right: margin },
   });
 
-  // Get final Y after table
-  y = (doc as any).lastAutoTable.finalY + 10;
-
-  // ============================================
-  // TOTALS
-  // ============================================
+  y = (doc.lastAutoTable?.finalY ?? y) + 10;
 
   const totalsX = pageWidth - margin - 70;
 
@@ -233,10 +220,6 @@ export function generateInvoicePDF(
     align: "right",
   });
 
-  // ============================================
-  // NOTES
-  // ============================================
-
   if (invoice.notes) {
     y += 20;
     doc.setFontSize(8);
@@ -250,16 +233,12 @@ export function generateInvoicePDF(
     doc.text(lines, margin, y);
   }
 
-  // ============================================
-  // FOOTER
-  // ============================================
-
   const footerY = doc.internal.pageSize.getHeight() - 15;
   doc.setFontSize(8);
   doc.setTextColor(163, 163, 163);
   doc.setFont("helvetica", "normal");
   doc.text(
-    `Generated by ${orgName} • ${new Date().toLocaleDateString()}`,
+    `Generated by ${orgName} - ${new Date().toLocaleDateString()}`,
     pageWidth / 2,
     footerY,
     { align: "center" }

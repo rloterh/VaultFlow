@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
+import { recordActivity } from "@/lib/activity/log";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ROLE_METADATA } from "@/config/roles";
@@ -20,6 +21,7 @@ export default function SettingsPage() {
   const { can, hasRole } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const canEdit = can("settings:update");
+  const canDeleteOrg = can("org:delete");
   const roleMetadata = currentRole ? ROLE_METADATA[currentRole] : null;
 
   const [orgForm, setOrgForm] = useState({
@@ -43,7 +45,20 @@ export default function SettingsPage() {
       .update({ name: orgForm.name, slug: orgForm.slug })
       .eq("id", currentOrg.id);
     if (error) addToast({ type: "error", title: "Failed to update", description: error.message });
-    else addToast({ type: "success", title: "Organization updated" });
+    else {
+      addToast({ type: "success", title: "Organization updated" });
+      await recordActivity({
+        orgId: currentOrg.id,
+        userId: profile?.id,
+        entityType: "organization",
+        entityId: currentOrg.id,
+        action: "org.updated",
+        metadata: {
+          name: orgForm.name,
+          slug: orgForm.slug,
+        },
+      });
+    }
     setSaving(null);
   }
 
@@ -136,6 +151,40 @@ export default function SettingsPage() {
         )}
       </Card>
 
+      <Card>
+        <div className="flex items-center gap-2">
+          <Shield className="h-4 w-4 text-neutral-400" />
+          <CardTitle>Security and audit</CardTitle>
+        </div>
+        <CardDescription>
+          Keep privileged actions visible and route sensitive workflows through the right surfaces.
+        </CardDescription>
+        <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_auto]">
+          <div className="space-y-3 text-sm text-neutral-500">
+            <p>
+              Team access changes, billing recovery, and organization updates should all remain reviewable in the audit trail.
+            </p>
+            <p>
+              Owners can approve irreversible workspace actions. Admins and finance operators should stay inside least-privilege paths for day-to-day work.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Link href="/dashboard/activity" className="block">
+              <Button variant="outline" className="w-full">
+                Open activity log
+              </Button>
+            </Link>
+            {hasRole("admin") && (
+              <Link href="/dashboard/admin" className="block">
+                <Button variant="ghost" className="w-full">
+                  Open governance hub
+                </Button>
+              </Link>
+            )}
+          </div>
+        </div>
+      </Card>
+
       {/* Profile */}
       <Card>
         <CardTitle>Profile</CardTitle>
@@ -212,7 +261,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Danger zone */}
-      {canEdit && currentOrg && (
+      {currentOrg && canDeleteOrg && (
         <Card className="border-red-200 dark:border-red-900/30">
           <div className="flex items-center gap-2">
             <Trash2 className="h-4 w-4 text-red-500" />
@@ -222,10 +271,22 @@ export default function SettingsPage() {
           <div className="mt-6 flex items-center justify-between rounded-lg border border-red-200 p-4 dark:border-red-900/30">
             <div>
               <p className="text-sm font-medium text-neutral-900 dark:text-white">Delete organization</p>
-              <p className="text-xs text-neutral-500">This will permanently delete all data including invoices, clients, and team members.</p>
+              <p className="text-xs text-neutral-500">This remains owner-only even when other admins can edit general settings. Destructive execution is intentionally withheld from this UI.</p>
             </div>
-            <Button variant="danger" size="sm">Delete</Button>
+            <Button variant="danger" size="sm" disabled>Owner approval required</Button>
           </div>
+        </Card>
+      )}
+
+      {currentOrg && canEdit && !canDeleteOrg && (
+        <Card className="border-amber-200 dark:border-amber-900/30">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-amber-500" />
+            <CardTitle className="text-amber-700 dark:text-amber-300">Protected actions</CardTitle>
+          </div>
+          <CardDescription>
+            You can manage workspace settings, but destructive organization controls stay reserved for owners.
+          </CardDescription>
         </Card>
       )}
     </motion.div>

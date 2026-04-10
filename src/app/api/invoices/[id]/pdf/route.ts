@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
 import { getSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import { generateInvoicePDF } from "@/lib/pdf/invoice-pdf";
+import type { Client, Invoice, InvoiceItem } from "@/types/database";
+
+type InvoicePdfQueryResult = Omit<Invoice, "client" | "items"> & {
+  client?: Client | Client[] | null;
+  items?: InvoiceItem[] | null;
+};
+
+type InvoicePdfPayload = Omit<Invoice, "client" | "items"> & {
+  client?: Client | null;
+  items?: InvoiceItem[];
+};
 
 export async function GET(
   _request: Request,
@@ -46,7 +57,19 @@ export async function GET(
       .eq("id", invoice.org_id)
       .single();
 
-    const pdfBuffer = generateInvoicePDF(invoice as any, org?.name ?? "VaultFlow");
+    const normalizedInvoice = invoice as InvoicePdfQueryResult;
+    const invoicePayload: InvoicePdfPayload = {
+      ...normalizedInvoice,
+      client: Array.isArray(normalizedInvoice.client)
+        ? normalizedInvoice.client[0] ?? null
+        : normalizedInvoice.client ?? null,
+      items: normalizedInvoice.items ?? [],
+    };
+
+    const pdfBuffer = generateInvoicePDF(
+      invoicePayload,
+      org?.name ?? "VaultFlow"
+    );
 
     return new NextResponse(new Uint8Array(pdfBuffer), {
       headers: {
