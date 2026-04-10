@@ -36,12 +36,17 @@ export function NotificationsMenu() {
     }
 
     const supabase = getSupabaseBrowserClient();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("activity_log")
       .select("*, profile:profiles(full_name, avatar_url)")
       .eq("org_id", currentOrg.id)
       .order("created_at", { ascending: false })
       .limit(5);
+
+    if (error) {
+      setEntries([]);
+      return;
+    }
 
     setEntries((data ?? []) as ActivityEntry[]);
   }, [currentOrg]);
@@ -57,7 +62,7 @@ export function NotificationsMenu() {
             label: "Recent activity",
             items: entries.map((entry) => ({
               label: humanizeAction(entry),
-              description: `${entry.profile?.full_name ?? "System"} · ${timeAgo(entry.created_at)}`,
+              description: `${entry.profile?.full_name ?? "System"} - ${timeAgo(entry.created_at)}`,
               href: "/dashboard/activity",
               icon: Clock3,
             })),
@@ -94,7 +99,9 @@ export function NotificationsMenu() {
       renderTrigger={() => (
         <span className="relative rounded-xl p-2 text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300">
           <Bell className="h-4 w-4" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-blue-500" />
+          {entries.length > 0 && (
+            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-blue-500" />
+          )}
         </span>
       )}
     />

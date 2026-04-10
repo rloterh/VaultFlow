@@ -17,6 +17,7 @@ export function WorkspaceQuickActions() {
       widthClassName="w-80"
       triggerLabel="Open workspace quick actions"
       triggerClassName="rounded-xl border border-transparent"
+      shortcut={{ key: "k", commandOrControl: true }}
       renderTrigger={() => (
         <span className="flex items-center gap-2">
           <SearchIcon />

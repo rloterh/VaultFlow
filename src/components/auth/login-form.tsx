@@ -1,15 +1,28 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Mail, Lock } from "lucide-react";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { useUIStore } from "@/stores/ui-store";
+import { Lock, Mail } from "lucide-react";
+import { OAuthButtons } from "./oauth-buttons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { OAuthButtons } from "./oauth-buttons";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useUIStore } from "@/stores/ui-store";
+
+function getSafeRedirect() {
+  if (typeof window === "undefined") {
+    return "/dashboard";
+  }
+
+  const redirect = new URLSearchParams(window.location.search).get("redirect");
+  if (!redirect || !redirect.startsWith("/")) {
+    return "/dashboard";
+  }
+
+  return redirect;
+}
 
 export function LoginForm() {
   const router = useRouter();
@@ -19,19 +32,26 @@ export function LoginForm() {
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   function validate() {
-    const errs: Record<string, string> = {};
-    if (!form.email) errs.email = "Email is required";
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email))
-      errs.email = "Invalid email address";
-    if (!form.password) errs.password = "Password is required";
-    else if (form.password.length < 6)
-      errs.password = "Password must be at least 6 characters";
-    setErrors(errs);
-    return Object.keys(errs).length === 0;
+    const nextErrors: Record<string, string> = {};
+
+    if (!form.email) {
+      nextErrors.email = "Email is required";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      nextErrors.email = "Invalid email address";
+    }
+
+    if (!form.password) {
+      nextErrors.password = "Password is required";
+    } else if (form.password.length < 6) {
+      nextErrors.password = "Password must be at least 6 characters";
+    }
+
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
     if (!validate()) return;
 
     setIsLoading(true);
@@ -43,13 +63,17 @@ export function LoginForm() {
     });
 
     if (error) {
-      addToast({ type: "error", title: "Sign in failed", description: error.message });
+      addToast({
+        type: "error",
+        title: "Sign in failed",
+        description: error.message,
+      });
       setIsLoading(false);
       return;
     }
 
     addToast({ type: "success", title: "Welcome back!" });
-    router.push("/dashboard");
+    router.push(getSafeRedirect());
     router.refresh();
   }
 
@@ -88,7 +112,7 @@ export function LoginForm() {
           type="email"
           placeholder="you@company.com"
           value={form.email}
-          onChange={(e) => setForm({ ...form, email: e.target.value })}
+          onChange={(event) => setForm({ ...form, email: event.target.value })}
           error={errors.email}
           leftIcon={<Mail className="h-4 w-4" />}
           autoComplete="email"
@@ -97,9 +121,9 @@ export function LoginForm() {
         <Input
           label="Password"
           type="password"
-          placeholder="••••••••"
+          placeholder="Enter your password"
           value={form.password}
-          onChange={(e) => setForm({ ...form, password: e.target.value })}
+          onChange={(event) => setForm({ ...form, password: event.target.value })}
           error={errors.password}
           leftIcon={<Lock className="h-4 w-4" />}
           autoComplete="current-password"
@@ -108,13 +132,13 @@ export function LoginForm() {
         <div className="flex items-center justify-end">
           <Link
             href="/forgot-password"
-            className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors"
+            className="text-sm text-neutral-500 transition-colors hover:text-neutral-900 dark:hover:text-white"
           >
             Forgot password?
           </Link>
         </div>
 
-        <Button type="submit" isLoading={isLoading} className="w-full h-11">
+        <Button type="submit" isLoading={isLoading} className="h-11 w-full">
           Sign in
         </Button>
       </form>

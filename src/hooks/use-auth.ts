@@ -18,25 +18,40 @@ export function useAuth() {
 
   const { currentOrg, currentRole } = useOrgStore();
 
-  // Initialize auth on first mount
   useEffect(() => {
     if (!isInitialized) {
-      initialize();
+      void initialize();
     }
   }, [isInitialized, initialize]);
 
-  // Auto-select first org if none selected
   useEffect(() => {
-    if (!currentOrg && memberships.length > 0) {
-      const firstMembership = memberships[0];
-      if (firstMembership.organization) {
-        useOrgStore.getState().setCurrentOrg(
-          firstMembership.organization,
-          firstMembership.role
-        );
+    if (!user || memberships.length === 0) {
+      if (currentOrg) {
+        useOrgStore.getState().clear();
       }
+      return;
     }
-  }, [currentOrg, memberships]);
+
+    const matchingMembership = memberships.find(
+      (membership) => membership.org_id === currentOrg?.id
+    );
+
+    if (matchingMembership?.organization) {
+      if (matchingMembership.role !== currentRole) {
+        useOrgStore
+          .getState()
+          .setCurrentOrg(matchingMembership.organization, matchingMembership.role);
+      }
+      return;
+    }
+
+    const firstMembership = memberships[0];
+    if (firstMembership?.organization) {
+      useOrgStore
+        .getState()
+        .setCurrentOrg(firstMembership.organization, firstMembership.role);
+    }
+  }, [currentOrg, currentRole, memberships, user]);
 
   return {
     user,

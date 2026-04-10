@@ -37,6 +37,12 @@ interface ActionMenuProps {
   renderTrigger?: (open: boolean) => ReactNode;
   triggerLabel?: string;
   triggerClassName?: string;
+  shortcut?: {
+    key: string;
+    commandOrControl?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+  };
 }
 
 function MenuButtonContent({
@@ -91,12 +97,26 @@ export function ActionMenu({
   renderTrigger,
   triggerLabel = "Open actions",
   triggerClassName,
+  shortcut,
 }: ActionMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonId = useId();
 
   useEffect(() => {
+    function isEditableTarget(target: EventTarget | null) {
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+
+      return (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable
+      );
+    }
+
     function handlePointerDown(event: MouseEvent) {
       if (!rootRef.current?.contains(event.target as Node)) {
         setOpen(false);
@@ -106,6 +126,26 @@ export function ActionMenu({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setOpen(false);
+        return;
+      }
+
+      if (!shortcut || isEditableTarget(event.target)) {
+        return;
+      }
+
+      const matchesKey = event.key.toLowerCase() === shortcut.key.toLowerCase();
+      const matchesModifier = shortcut.commandOrControl
+        ? event.metaKey || event.ctrlKey
+        : !event.metaKey && !event.ctrlKey;
+
+      if (
+        matchesKey &&
+        matchesModifier &&
+        (!!shortcut.shiftKey === event.shiftKey) &&
+        (!!shortcut.altKey === event.altKey)
+      ) {
+        event.preventDefault();
+        setOpen(true);
       }
     }
 
@@ -116,7 +156,7 @@ export function ActionMenu({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [shortcut]);
 
   return (
     <div ref={rootRef} className="relative inline-flex">

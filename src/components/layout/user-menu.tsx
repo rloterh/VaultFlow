@@ -26,7 +26,7 @@ export function UserMenu() {
         .filter((membership) => membership.organization)
         .map((membership) => ({
           label: membership.organization?.name ?? "Workspace",
-          description: `${membership.role} · ${planLabel(membership.organization?.plan)}`,
+          description: `${membership.role} - ${planLabel(membership.organization?.plan)}`,
           checked: currentOrg?.id === membership.org_id,
           onSelect: () => {
             switchOrg(membership.org_id, memberships);
@@ -69,8 +69,19 @@ export function UserMenu() {
           icon: LogOut,
           tone: "danger",
           onSelect: async () => {
-            await signOut();
-            router.replace("/login");
+            try {
+              await signOut();
+              router.replace("/login");
+            } catch (error) {
+              addToast({
+                type: "error",
+                title: "Unable to sign out",
+                description:
+                  error instanceof Error
+                    ? error.message
+                    : "Please try again in a moment.",
+              });
+            }
           },
         },
       ],
