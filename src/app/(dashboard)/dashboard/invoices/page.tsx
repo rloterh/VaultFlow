@@ -22,6 +22,7 @@ import {
   formatQueuePriority,
   type ReminderActivityLike,
 } from "@/lib/collections/queue";
+import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
@@ -53,6 +54,14 @@ function fmtDate(value: string) {
   });
 }
 
+function timeAgo(value: string) {
+  const seconds = Math.floor((Date.now() - new Date(value).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 function buildInvoiceNumber() {
   const dateChunk = new Date().toISOString().slice(2, 10).replace(/-/g, "");
   const randomChunk = Math.floor(100 + Math.random() * 900);
@@ -70,6 +79,14 @@ export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<ReminderActivityLike[]>([]);
+  const [workflowActivity, setWorkflowActivity] = useState<
+    Array<{
+      entity_id: string;
+      action: string;
+      created_at: string;
+      profile?: { full_name: string | null; avatar_url: string | null } | null;
+    }>
+  >([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<InvoiceStatus | "all">("all");
@@ -108,7 +125,7 @@ export default function InvoicesPage() {
       query = query.ilike("invoice_number", `%${search}%`);
     }
 
-    const [invoiceRes, clientRes, reminderRes] = await Promise.all([
+    const [invoiceRes, clientRes, reminderRes, activityRes] = await Promise.all([
       query,
       sb
         .from("clients")
@@ -124,6 +141,13 @@ export default function InvoicesPage() {
         .eq("action", "invoice.reminder_sent")
         .order("created_at", { ascending: false })
         .limit(200),
+      sb
+        .from("activity_log")
+        .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
+        .eq("org_id", currentOrg.id)
+        .eq("entity_type", "invoice")
+        .order("created_at", { ascending: false })
+        .limit(300),
     ]);
 
     const nextInvoices = (invoiceRes.data ?? []) as Invoice[];
@@ -132,6 +156,14 @@ export default function InvoicesPage() {
     setInvoices(nextInvoices);
     setClients(nextClients);
     setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
+    setWorkflowActivity(
+      (activityRes.data ?? []) as Array<{
+        entity_id: string;
+        action: string;
+        created_at: string;
+        profile?: { full_name: string | null; avatar_url: string | null } | null;
+      }>
+    );
     setDraftForm((current) => ({
       ...current,
       client_id: current.client_id || nextClients[0]?.id || "",
@@ -310,6 +342,10 @@ export default function InvoicesPage() {
     () => new Map(collectionsQueue.map((item) => [item.invoice.id, item])),
     [collectionsQueue]
   );
+  const accountabilityByInvoiceId = useMemo(
+    () => buildWorkflowAccountabilityMap(workflowActivity),
+    [workflowActivity]
+  );
 
   const columns: Column<Invoice>[] = [
     {
@@ -335,9 +371,11 @@ export default function InvoicesPage() {
             {(row.client as Client | undefined)?.name ?? "-"}
           </p>
           <p className="text-xs text-neutral-500">
-            {queueByInvoiceId.get(row.id)?.latestReminderAt
-              ? `${formatLatestReminderStatus(queueByInvoiceId.get(row.id)!)}`
-              : (row.client as Client | undefined)?.company ?? ""}
+            {accountabilityByInvoiceId.get(row.id)?.ownerName
+              ? `Owned by ${accountabilityByInvoiceId.get(row.id)?.ownerName}`
+              : queueByInvoiceId.get(row.id)?.latestReminderAt
+                ? `${formatLatestReminderStatus(queueByInvoiceId.get(row.id)!)}`
+                : (row.client as Client | undefined)?.company ?? ""}
           </p>
         </div>
       ),
@@ -349,14 +387,19 @@ export default function InvoicesPage() {
       width: "180px",
       render: (row) => {
         const queueItem = queueByInvoiceId.get(row.id);
+        const accountability = accountabilityByInvoiceId.get(row.id);
         return (
           <div className="space-y-1">
             <StatusBadge status={row.status} />
-            {queueItem && (
+            {accountability?.lastTouchedAt ? (
+              <p className="text-xs text-neutral-500">
+                {accountability.lastActorName ?? "System"} · {timeAgo(accountability.lastTouchedAt)}
+              </p>
+            ) : queueItem ? (
               <p className="text-xs text-neutral-500">
                 {formatQueuePriority(queueItem.priority)}
               </p>
-            )}
+            ) : null}
           </div>
         );
       },
@@ -528,6 +571,14 @@ export default function InvoicesPage() {
                 </div>
                 <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
                   {item.clientName}
+                </p>
+                <p className="mt-1 text-xs text-neutral-400">
+                  {accountabilityByInvoiceId.get(item.invoice.id)?.ownerName
+                    ? `Owned by ${accountabilityByInvoiceId.get(item.invoice.id)?.ownerName}`
+                    : "No workflow owner recorded yet"}
+                  {accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt
+                    ? ` · Last touch ${timeAgo(accountabilityByInvoiceId.get(item.invoice.id)!.lastTouchedAt!)}`
+                    : ""}
                 </p>
                 <div className="mt-3 flex items-center justify-between text-sm">
                   <span className="text-neutral-400">Outstanding</span>

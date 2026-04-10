@@ -63,6 +63,7 @@ import {
   buildClientOpsViewHref,
   getClientOpsViewForQueuePreset,
 } from "@/lib/operations/client-views";
+import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { useOrgStore } from "@/stores/org-store";
@@ -176,6 +177,13 @@ interface ReminderActivityEntry {
   profile?: { full_name: string | null };
 }
 
+interface InvoiceWorkflowActivityEntry {
+  entity_id: string;
+  action: string;
+  created_at: string;
+  profile?: { full_name: string | null; avatar_url: string | null } | null;
+}
+
 function formatRelativeTime(value: string) {
   const seconds = Math.floor((Date.now() - new Date(value).getTime()) / 1000);
   if (seconds < 60) return "just now";
@@ -196,6 +204,9 @@ function ReportsContent() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<ReminderActivityEntry[]>([]);
+  const [workflowActivity, setWorkflowActivity] = useState<
+    InvoiceWorkflowActivityEntry[]
+  >([]);
   const [reminderInvoiceId, setReminderInvoiceId] = useState<string | null>(null);
   const [filters, setFilters] = useState<ReportFilters>({
     range: "90d",
@@ -208,7 +219,7 @@ function ReportsContent() {
     setLoading(true);
     setError(null);
     const supabase = getSupabaseBrowserClient();
-    const [invoiceResponse, clientResponse, reminderResponse] = await Promise.all([
+    const [invoiceResponse, clientResponse, reminderResponse, activityResponse] = await Promise.all([
       supabase
         .from("invoices")
         .select("*, client:clients(id, name, company)")
@@ -228,13 +239,21 @@ function ReportsContent() {
         .eq("action", "invoice.reminder_sent")
         .order("created_at", { ascending: false })
         .limit(100),
+      supabase
+        .from("activity_log")
+        .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
+        .eq("org_id", currentOrg.id)
+        .eq("entity_type", "invoice")
+        .order("created_at", { ascending: false })
+        .limit(300),
     ]);
 
-    if (invoiceResponse.error || clientResponse.error || reminderResponse.error) {
+    if (invoiceResponse.error || clientResponse.error || reminderResponse.error || activityResponse.error) {
       const message =
         invoiceResponse.error?.message ??
         clientResponse.error?.message ??
         reminderResponse.error?.message ??
+        activityResponse.error?.message ??
         "Unable to load reports.";
       setError(message);
       setLoading(false);
@@ -249,6 +268,7 @@ function ReportsContent() {
     setInvoices((invoiceResponse.data ?? []) as Invoice[]);
     setClients((clientResponse.data ?? []) as Client[]);
     setReminders((reminderResponse.data ?? []) as ReminderActivityEntry[]);
+    setWorkflowActivity((activityResponse.data ?? []) as InvoiceWorkflowActivityEntry[]);
     setLoading(false);
   }, [addToast, currentOrg]);
 
@@ -357,6 +377,7 @@ function ReportsContent() {
   const matchingClientViewHref = buildClientOpsViewHref(
     getClientOpsViewForQueuePreset(queuePreset)
   );
+  const accountabilityByInvoiceId = buildWorkflowAccountabilityMap(workflowActivity);
 
   reminders.forEach((entry) => {
     if (!reminderLookup.has(entry.entity_id)) {
@@ -664,11 +685,21 @@ function ReportsContent() {
                           </p>
                         </div>
                       </div>
-                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3 dark:border-neutral-800">
-                        <div className="text-xs text-neutral-400">
-                          {reminderLookup.has(item.invoice.id)
-                            ? `${getReminderEntryLabel(reminderLookup.get(item.invoice.id) ?? null)} ${formatRelativeTime(reminderLookup.get(item.invoice.id)?.created_at ?? "")}`
-                            : formatLatestReminderStatus(item)}
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+                        <div className="space-y-1 text-xs text-neutral-400">
+                          <p>
+                            {reminderLookup.has(item.invoice.id)
+                              ? `${getReminderEntryLabel(reminderLookup.get(item.invoice.id) ?? null)} ${formatRelativeTime(reminderLookup.get(item.invoice.id)?.created_at ?? "")}`
+                              : formatLatestReminderStatus(item)}
+                          </p>
+                          <p>
+                            {accountabilityByInvoiceId.get(item.invoice.id)?.ownerName
+                              ? `Owned by ${accountabilityByInvoiceId.get(item.invoice.id)?.ownerName}`
+                              : "No workflow owner recorded yet"}
+                            {accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt
+                              ? ` · Last touch ${formatRelativeTime(accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt ?? "")}`
+                              : ""}
+                          </p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                           {can("invoices:update") && canRecordReminder(item.invoice) && (

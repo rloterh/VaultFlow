@@ -39,6 +39,7 @@ import {
   getReminderRecommendation,
   recordInvoiceReminder,
 } from "@/lib/invoices/follow-up";
+import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import { useUIStore } from "@/stores/ui-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Client, Invoice, InvoiceItem } from "@/types/database";
@@ -190,6 +191,10 @@ export default function InvoiceDetailPage() {
   const items = useMemo(
     () => [...(invoice?.items ?? [])].sort((a, b) => a.sort_order - b.sort_order),
     [invoice?.items]
+  );
+  const accountability = useMemo(
+    () => buildWorkflowAccountabilityMap(activity).get(id) ?? null,
+    [activity, id]
   );
 
   if (loading) {
@@ -509,6 +514,32 @@ export default function InvoiceDetailPage() {
                         : "Awaiting send"}
                     </Badge>
                   )}
+                </div>
+              </div>
+              <div className="rounded-xl border border-neutral-200 px-3 py-3 dark:border-neutral-800">
+                <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                  Workflow accountability
+                </p>
+                <div className="mt-3 space-y-2 text-xs text-neutral-500">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Workflow owner</span>
+                    <span className="font-medium text-neutral-900 dark:text-white">
+                      {accountability?.ownerName ?? "Not recorded yet"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Last operator touch</span>
+                    <span className="font-medium text-neutral-900 dark:text-white">
+                      {accountability?.lastTouchedAt
+                        ? `${accountability.lastActorName ?? "System"} · ${timeAgo(accountability.lastTouchedAt)}`
+                        : "No workflow touch recorded yet"}
+                    </span>
+                  </div>
+                  <p className="pt-1 text-neutral-400">
+                    {canUpdateInvoices
+                      ? "Use reminder logging and lifecycle controls to keep ownership visible as this invoice moves."
+                      : "Your role can audit who owns this invoice and when it was last worked, while updates stay with operators."}
+                  </p>
                 </div>
               </div>
             </div>
