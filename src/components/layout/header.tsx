@@ -1,9 +1,10 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Bell, Building2, Menu, Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Building2, Menu } from "lucide-react";
+import { NotificationsMenu } from "@/components/layout/notifications-menu";
 import { UserMenu } from "@/components/layout/user-menu";
+import { WorkspaceQuickActions } from "@/components/layout/workspace-quick-actions";
 import { useAuth } from "@/hooks/use-auth";
 import { useUIStore } from "@/stores/ui-store";
 
@@ -68,25 +69,9 @@ export function Header() {
           </div>
         )}
 
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-2 rounded-xl border border-transparent text-neutral-500"
-        >
-          <Search className="h-4 w-4" />
-          <span className="hidden sm:inline">Search...</span>
-          <kbd className="hidden rounded border border-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-400 sm:inline dark:border-neutral-700">
-            Ctrl K
-          </kbd>
-        </Button>
+        <WorkspaceQuickActions />
 
-        <button
-          type="button"
-          className="relative rounded-xl p-2 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
-        >
-          <Bell className="h-4 w-4" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-blue-500" />
-        </button>
+        <NotificationsMenu />
 
         <UserMenu />
       </div>

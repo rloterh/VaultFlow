@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { ChevronDown, CreditCard, LayoutDashboard, LogOut, Settings2 } from "lucide-react";
 import { ActionMenu, type ActionMenuSection } from "@/components/ui/action-menu";
 import { Avatar } from "@/components/ui/badge";
@@ -13,6 +14,7 @@ function planLabel(plan: string | undefined) {
 }
 
 export function UserMenu() {
+  const router = useRouter();
   const { profile, memberships, currentOrg, currentRole, signOut } = useAuth();
   const switchOrg = useOrgStore((s) => s.switchOrg);
   const addToast = useUIStore((s) => s.addToast);
@@ -68,6 +70,7 @@ export function UserMenu() {
           tone: "danger",
           onSelect: async () => {
             await signOut();
+            router.replace("/login");
           },
         },
       ],
