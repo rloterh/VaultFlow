@@ -2,17 +2,14 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronsLeft,
   ChevronsRight,
-  LogOut,
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { useUIStore } from "@/stores/ui-store";
 import { useAuth } from "@/hooks/use-auth";
-import { usePermissions } from "@/hooks/use-permissions";
 import { useOrgStore } from "@/stores/org-store";
 import { mainNavItems, bottomNavItems, type NavItem } from "@/config/navigation";
 import { hasMinRole } from "@/config/roles";
@@ -49,7 +46,7 @@ function NavItemLink({ item, collapsed }: { item: NavItem; collapsed: boolean })
 }
 
 export function Sidebar() {
-  const { profile, memberships, signOut } = useAuth();
+  const { profile } = useAuth();
   const { currentOrg, currentRole } = useOrgStore();
   const collapsed = useUIStore((s) => s.sidebarCollapsed);
   const toggleCollapse = useUIStore((s) => s.toggleSidebarCollapse);
@@ -103,17 +100,21 @@ export function Sidebar() {
         <div className="border-b border-neutral-200 p-3 dark:border-neutral-800">
           <button className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
             <div className="flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-blue-500 to-purple-600 text-xs font-bold text-white">
-              {currentOrg.name.charAt(0)}
+                  {currentOrg.name.charAt(0)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="truncate text-sm font-medium text-neutral-900 dark:text-white">
+                    {currentOrg.name}
+                  </p>
+                  <div className="flex items-center gap-2 text-xs capitalize text-neutral-500">
+                    <span>{currentRole}</span>
+                    <span className="h-1 w-1 rounded-full bg-neutral-300 dark:bg-neutral-700" />
+                    <span>{currentOrg.plan} plan</span>
+                  </div>
+                </div>
+                <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400" />
+              </button>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="truncate text-sm font-medium text-neutral-900 dark:text-white">
-                {currentOrg.name}
-              </p>
-              <p className="text-xs capitalize text-neutral-500">{currentRole}</p>
-            </div>
-            <ChevronDown className="h-4 w-4 shrink-0 text-neutral-400" />
-          </button>
-        </div>
       )}
 
       {/* Main nav */}
@@ -153,13 +154,6 @@ export function Sidebar() {
                   {profile?.email}
                 </p>
               </div>
-              <button
-                onClick={signOut}
-                className="rounded-md p-1.5 text-neutral-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-                title="Sign out"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
             </>
           )}
         </div>
