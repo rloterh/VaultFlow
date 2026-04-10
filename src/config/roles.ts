@@ -245,3 +245,17 @@ export function hasMinRole(userRole: Role, requiredRole: Role): boolean {
 export function canManageRole(actorRole: Role, targetRole: Role): boolean {
   return ROLE_HIERARCHY.indexOf(actorRole) > ROLE_HIERARCHY.indexOf(targetRole);
 }
+
+export function isRole(value: string | null | undefined): value is Role {
+  return !!value && ROLE_HIERARCHY.includes(value as Role);
+}
+
+export function getAssignableRoles(actorRole: Role | null | undefined): Role[] {
+  if (!actorRole) {
+    return [];
+  }
+
+  return ROLE_HIERARCHY.filter(
+    (role) => role !== "owner" && canManageRole(actorRole, role)
+  );
+}

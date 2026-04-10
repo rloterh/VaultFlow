@@ -1,3 +1,4 @@
+import { buildCollectionsQueue, type CollectionsQueuePreset, type ReminderActivityLike } from "@/lib/collections/queue";
 import type { Client, Invoice } from "@/types/database";
 
 export type ClientHealthState = "new" | "healthy" | "attention" | "at-risk";
@@ -28,6 +29,15 @@ export interface RankedClientAccount {
   openExposure: number;
   overdueTotal: number;
   nextDueDate: string | null;
+}
+
+export interface ClientCollectionsSummary {
+  openInvoices: number;
+  needsTouch: number;
+  overdue: number;
+  unreminded: number;
+  latestReminderAt: string | null;
+  totalOutstanding: number;
 }
 
 export function buildClientFinancialSnapshot(
@@ -150,4 +160,58 @@ export function rankClientAccounts(
         right.openExposure - left.openExposure
       );
     });
+}
+
+export function buildClientCollectionsSummaryMap(
+  invoices: Invoice[],
+  reminders: ReminderActivityLike[]
+) {
+  const queue = buildCollectionsQueue(invoices, reminders);
+  const summaryMap = new Map<string, ClientCollectionsSummary>();
+
+  queue.forEach((item) => {
+    const current = summaryMap.get(item.invoice.client_id) ?? {
+      openInvoices: 0,
+      needsTouch: 0,
+      overdue: 0,
+      unreminded: 0,
+      latestReminderAt: null,
+      totalOutstanding: 0,
+    };
+
+    current.openInvoices += 1;
+    current.totalOutstanding += item.outstandingAmount;
+    if (item.priority !== "monitor") {
+      current.needsTouch += 1;
+    }
+    if (item.invoice.status === "overdue") {
+      current.overdue += 1;
+    }
+    if (item.reminderCount === 0) {
+      current.unreminded += 1;
+    }
+    if (
+      item.latestReminderAt &&
+      (!current.latestReminderAt ||
+        new Date(item.latestReminderAt).getTime() >
+          new Date(current.latestReminderAt).getTime())
+    ) {
+      current.latestReminderAt = item.latestReminderAt;
+    }
+
+    summaryMap.set(item.invoice.client_id, current);
+  });
+
+  return summaryMap;
+}
+
+export function matchesClientQueuePreset(
+  summary: ClientCollectionsSummary,
+  preset: CollectionsQueuePreset
+) {
+  if (preset === "all") return true;
+  if (preset === "needs-touch") return summary.needsTouch > 0;
+  if (preset === "overdue") return summary.overdue > 0;
+  if (preset === "unreminded") return summary.unreminded > 0;
+  return true;
 }

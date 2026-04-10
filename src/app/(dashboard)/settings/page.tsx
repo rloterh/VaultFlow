@@ -17,7 +17,7 @@ import { ROLE_METADATA } from "@/config/roles";
 export default function SettingsPage() {
   const { profile, currentRole } = useAuth();
   const { currentOrg, members } = useOrgStore();
-  const { can, role } = usePermissions();
+  const { can, hasRole } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const canEdit = can("settings:update");
   const roleMetadata = currentRole ? ROLE_METADATA[currentRole] : null;
@@ -96,25 +96,34 @@ export default function SettingsPage() {
             </div>
           </div>
           <div className="space-y-2">
-            {role && ["admin", "owner"].includes(role) && (
+            {can("members:invite") && (
               <Link href="/settings/team" className="block">
                 <Button variant="outline" className="w-full">
                   Open team access
                 </Button>
               </Link>
             )}
-            {role && ["admin", "owner"].includes(role) && (
+            {hasRole("admin") && (
               <Link href="/dashboard/admin" className="block">
                 <Button variant="ghost" className="w-full">
                   Open admin overview
                 </Button>
               </Link>
             )}
-            <Link href="/settings/billing" className="block">
-              <Button variant="ghost" className="w-full">
-                Open billing settings
-              </Button>
-            </Link>
+            {can("org:billing") && (
+              <Link href="/settings/billing" className="block">
+                <Button variant="ghost" className="w-full">
+                  Open billing settings
+                </Button>
+              </Link>
+            )}
+            {can("reports:read") && (
+              <Link href="/dashboard/reports" className="block">
+                <Button variant="ghost" className="w-full">
+                  Open reports
+                </Button>
+              </Link>
+            )}
           </div>
         </div>
         {currentOrg && (

@@ -1,3 +1,5 @@
+import type { OrgMembership } from "./auth";
+
 // Re-export Phase 1 types
 export type { Profile, Organization, OrgMembership, OrgInvite, AuthUser, ApiResponse, PaginatedResponse } from "./auth";
 export type { OrgPlan, InviteStatus } from "./auth";
@@ -78,6 +80,17 @@ export interface ActivityEntry {
   created_at: string;
   // Joined
   profile?: { full_name: string | null; avatar_url: string | null };
+}
+
+export interface VendorClientAssignment {
+  id: string;
+  org_id: string;
+  membership_id: string;
+  client_id: string;
+  assigned_by: string | null;
+  created_at: string;
+  client?: Pick<Client, "id" | "name" | "company"> | null;
+  membership?: Pick<OrgMembership, "id" | "user_id" | "role"> | null;
 }
 
 // ============================================

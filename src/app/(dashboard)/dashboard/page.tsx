@@ -42,6 +42,10 @@ import {
   summarizeQueueAccountability,
 } from "@/lib/operations/accountability";
 import { buildReportSnapshot } from "@/lib/reports/analytics";
+import {
+  fetchVendorAssignedClientIds,
+  isVendorRole,
+} from "@/lib/rbac/vendor-access";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
@@ -89,32 +93,101 @@ export default function DashboardPage() {
   const [operationsPulse, setOperationsPulse] = useState(() =>
     buildReportSnapshot([], [], { range: "90d", status: "all" })
   );
+  const isVendorDashboard = isVendorRole(permissions.role);
+  const isViewerDashboard = permissions.role === "viewer";
 
   const fetchData = useCallback(async () => {
     if (!currentOrg) return;
     const sb = getSupabaseBrowserClient();
-    const [invRes, cliRes, actRes, reminderRes, workflowRes] = await Promise.all([
-      sb.from("invoices").select("*, client:clients(id, name, company)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }),
-      sb.from("clients").select("*").eq("org_id", currentOrg.id).eq("is_active", true),
-      sb.from("activity_log").select("*, profile:profiles(full_name, avatar_url)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }).limit(8),
-      sb
-        .from("activity_log")
-        .select("entity_id, created_at, metadata")
-        .eq("org_id", currentOrg.id)
-        .eq("entity_type", "invoice")
-        .eq("action", "invoice.reminder_sent")
-        .order("created_at", { ascending: false })
-        .limit(100),
-      sb
-        .from("activity_log")
-        .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
-        .eq("org_id", currentOrg.id)
-        .eq("entity_type", "invoice")
-        .order("created_at", { ascending: false })
-        .limit(300),
-    ]);
+    const assignedClientIds = isVendorDashboard
+      ? await fetchVendorAssignedClientIds(sb, currentOrg.id, user?.id)
+      : [];
+
+    if (isVendorDashboard && assignedClientIds.length === 0) {
+      setInvoices([]);
+      setClients([]);
+      setRecent([]);
+      setActivity([]);
+      setReminders([]);
+      setWorkflowActivity([]);
+      setStats({
+        totalRevenue: 0,
+        revenueChange: 0,
+        invoicesSent: 0,
+        invoicesChange: 0,
+        activeClients: 0,
+        clientsChange: 0,
+        overdueAmount: 0,
+        overdueChange: 0,
+      });
+      setRevenueData([]);
+      setStatusData([]);
+      setOperationsPulse(buildReportSnapshot([], [], { range: "90d", status: "all" }));
+      setLoading(false);
+      return;
+    }
+
+    let invoiceQuery = sb
+      .from("invoices")
+      .select("*, client:clients(id, name, company)")
+      .eq("org_id", currentOrg.id)
+      .order("created_at", { ascending: false });
+    let clientQuery = sb
+      .from("clients")
+      .select("*")
+      .eq("org_id", currentOrg.id)
+      .eq("is_active", true);
+
+    if (isVendorDashboard) {
+      invoiceQuery = invoiceQuery.in("client_id", assignedClientIds);
+      clientQuery = clientQuery.in("id", assignedClientIds);
+    }
+
+    const [invRes, cliRes] = await Promise.all([invoiceQuery, clientQuery]);
     const invoices = (invRes.data ?? []) as Invoice[];
     const clients = (cliRes.data ?? []) as Client[];
+    const invoiceIds = invoices.map((invoice) => invoice.id);
+    const [actRes, reminderRes, workflowRes] =
+      invoiceIds.length > 0
+        ? await Promise.all([
+            sb
+              .from("activity_log")
+              .select("*, profile:profiles(full_name, avatar_url)")
+              .eq("org_id", currentOrg.id)
+              .eq("entity_type", "invoice")
+              .in("entity_id", invoiceIds)
+              .order("created_at", { ascending: false })
+              .limit(8),
+            sb
+              .from("activity_log")
+              .select("entity_id, created_at, metadata")
+              .eq("org_id", currentOrg.id)
+              .eq("entity_type", "invoice")
+              .eq("action", "invoice.reminder_sent")
+              .in("entity_id", invoiceIds)
+              .order("created_at", { ascending: false })
+              .limit(100),
+            sb
+              .from("activity_log")
+              .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
+              .eq("org_id", currentOrg.id)
+              .eq("entity_type", "invoice")
+              .in("entity_id", invoiceIds)
+              .order("created_at", { ascending: false })
+              .limit(300),
+          ])
+        : [
+            { data: [] as ActivityEntry[] },
+            { data: [] as ReminderActivityLike[] },
+            {
+              data: [] as Array<{
+                entity_id: string;
+                action: string;
+                created_at: string;
+                profile?: { full_name: string | null; avatar_url: string | null } | null;
+              }>,
+            },
+          ];
     setInvoices(invoices);
     setClients(clients);
     setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
@@ -161,13 +234,19 @@ export default function DashboardPage() {
       }))
     );
     setLoading(false);
-  }, [currentOrg]);
+  }, [currentOrg, isVendorDashboard, user?.id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
   useInvoiceRealtime(currentOrg?.id, fetchData);
 
   const name = profile?.full_name?.split(" ")[0] || "there";
-  const primaryAction = permissions.can("invoices:create")
+  const primaryAction = isVendorDashboard
+    ? {
+        href: "/dashboard/clients",
+        label: "Open assigned accounts",
+        icon: <ArrowUpRight className="h-4 w-4" />,
+      }
+    : permissions.can("invoices:create")
     ? {
         href: "/dashboard/invoices",
         label: "New invoice",
@@ -244,54 +323,74 @@ export default function DashboardPage() {
       <motion.div variants={item} className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-white">Good morning, {name}</h1>
-          <p className="mt-1 text-sm text-neutral-500">Here&apos;s what&apos;s happening with your finances today.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            {isVendorDashboard
+              ? "Here is the current posture across the accounts assigned to your vendor seat."
+              : isViewerDashboard
+                ? "Here&apos;s the current read-only pulse across your workspace."
+                : "Here&apos;s what&apos;s happening with your finances today."}
+          </p>
         </div>
         <Link href={primaryAction.href}><Button leftIcon={primaryAction.icon}>{primaryAction.label}</Button></Link>
       </motion.div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard label="Total Revenue" value={fmt(stats?.totalRevenue ?? 0)} change={`+${stats?.revenueChange}%`} trend="up" icon={DollarSign} iconColor="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400" index={0} />
-        <MetricCard label="Invoices Sent" value={String(stats?.invoicesSent ?? 0)} change={`+${stats?.invoicesChange}`} trend="up" icon={FileText} iconColor="bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" index={1} />
-        <MetricCard label="Active Clients" value={String(stats?.activeClients ?? 0)} change={`+${stats?.clientsChange}`} trend="up" icon={Users} iconColor="bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400" index={2} />
-        <MetricCard label="Overdue" value={fmt(stats?.overdueAmount ?? 0)} change={`${stats?.overdueChange}%`} trend="down" icon={TrendingUp} iconColor="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400" index={3} />
+        <MetricCard label={isVendorDashboard ? "Assigned revenue" : "Total Revenue"} value={fmt(stats?.totalRevenue ?? 0)} change={`+${stats?.revenueChange}%`} trend="up" icon={DollarSign} iconColor="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400" index={0} />
+        <MetricCard label={isVendorDashboard ? "Assigned invoices" : "Invoices Sent"} value={String(stats?.invoicesSent ?? 0)} change={`+${stats?.invoicesChange}`} trend="up" icon={FileText} iconColor="bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" index={1} />
+        <MetricCard label={isVendorDashboard ? "Assigned clients" : "Active Clients"} value={String(stats?.activeClients ?? 0)} change={`+${stats?.clientsChange}`} trend="up" icon={Users} iconColor="bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400" index={2} />
+        <MetricCard label={isVendorDashboard ? "Assigned overdue" : "Overdue"} value={fmt(stats?.overdueAmount ?? 0)} change={`${stats?.overdueChange}%`} trend="down" icon={TrendingUp} iconColor="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400" index={3} />
       </div>
 
       <motion.div variants={item} className="grid gap-4 lg:grid-cols-3">
         <Card>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">Collection pulse</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+            {isVendorDashboard ? "Assigned exposure" : "Collection pulse"}
+          </p>
           <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
             {fmt(queueSummary.totalOutstanding)}
           </p>
           <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
             {queueSummary.needsTouch > 0
               ? `${queueSummary.needsTouch} invoices currently need a collections touchpoint.`
-              : "Receivables are moving cleanly with no urgent collections work right now."}
+              : isVendorDashboard
+                ? "No assigned invoices currently require vendor-side attention."
+                : "Receivables are moving cleanly with no urgent collections work right now."}
           </p>
           <Link href={queueClientOpsHref} className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
-            Open client workspace
+            {isVendorDashboard ? "Open assigned clients" : "Open client workspace"}
           </Link>
         </Card>
         <Card>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">Top billed account</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+            {isVendorDashboard ? "Assigned account focus" : "Top billed account"}
+          </p>
           <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
             {biggestExposure?.name ?? "No account at risk"}
           </p>
           <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
             {biggestExposure
               ? `${fmt(biggestExposure.total_revenue)} billed across ${biggestExposure.invoice_count} invoices in the current reporting pulse.`
-              : "Once invoices are active, the dashboard will highlight the account with the heaviest billed activity."}
+              : isVendorDashboard
+                ? "Assigned client highlights will appear once invoices are linked to your seat."
+                : "Once invoices are active, the dashboard will highlight the account with the heaviest billed activity."}
           </p>
           <Link href={buildClientOpsViewHref("all-accounts")} className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
-            Open client ops
+            {isVendorDashboard ? "Open assigned client ops" : "Open client ops"}
           </Link>
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">Workspace mode</p>
           <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
-            {permissions.can("invoices:create") ? "Operator access" : "Read-only reporting"}
+            {isVendorDashboard
+              ? "Assigned vendor scope"
+              : permissions.can("invoices:create")
+                ? "Operator access"
+                : "Read-only reporting"}
           </p>
           <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
-            {permissions.can("invoices:create")
+            {isVendorDashboard
+              ? "Your seat is restricted to assigned clients and invoice context without internal mutation controls."
+              : permissions.can("invoices:create")
               ? "You can create invoices, manage workflows, and drill into account activity from the dashboard."
               : "Your current role is optimized for monitoring workspace performance without changing invoice state."}
           </p>

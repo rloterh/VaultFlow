@@ -52,6 +52,10 @@ import {
   type ClientOpsViewId,
   type ClientTouchFilter,
 } from "@/lib/operations/client-views";
+import {
+  fetchVendorAssignedClientIds,
+  isVendorRole,
+} from "@/lib/rbac/vendor-access";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -84,7 +88,7 @@ function ClientsPageContent() {
   const searchParams = useSearchParams();
   const { currentOrg } = useOrgStore();
   const { user } = useAuth();
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const storedClientOpsView = useUIStore((s) => s.clientOpsView);
   const [clients, setClients] = useState<ClientOperationalRow[]>([]);
@@ -126,29 +130,49 @@ function ClientsPageContent() {
     }
 
     const sb = getSupabaseBrowserClient();
-    const [clientRes, invoiceRes, reminderRes] = await Promise.all([
-      sb
-        .from("clients")
-        .select("*")
-        .eq("org_id", currentOrg.id)
-        .eq("is_active", true)
-        .order("total_revenue", { ascending: false }),
-      sb
-        .from("invoices")
-        .select("id, client_id, status, total, issue_date, due_date")
-        .eq("org_id", currentOrg.id),
-      sb
-        .from("activity_log")
-        .select("entity_id, created_at, metadata")
-        .eq("org_id", currentOrg.id)
-        .eq("entity_type", "invoice")
-        .eq("action", "invoice.reminder_sent")
-        .order("created_at", { ascending: false })
-        .limit(200),
-    ]);
+    const assignedClientIds = isVendorRole(role)
+      ? await fetchVendorAssignedClientIds(sb, currentOrg.id, user?.id)
+      : [];
+
+    if (isVendorRole(role) && assignedClientIds.length === 0) {
+      setClients([]);
+      setLoading(false);
+      return;
+    }
+
+    let clientQuery = sb
+      .from("clients")
+      .select("*")
+      .eq("org_id", currentOrg.id)
+      .eq("is_active", true)
+      .order("total_revenue", { ascending: false });
+    let invoiceQuery = sb
+      .from("invoices")
+      .select("id, client_id, status, total, issue_date, due_date")
+      .eq("org_id", currentOrg.id);
+
+    if (isVendorRole(role)) {
+      clientQuery = clientQuery.in("id", assignedClientIds);
+      invoiceQuery = invoiceQuery.in("client_id", assignedClientIds);
+    }
+
+    const [clientRes, invoiceRes] = await Promise.all([clientQuery, invoiceQuery]);
 
     const invoiceData = (invoiceRes.data ?? []) as Invoice[];
-    const reminderData = (reminderRes.data ?? []) as ReminderActivityLike[];
+    const invoiceIds = invoiceData.map((invoice) => invoice.id);
+    const reminderResponse =
+      invoiceIds.length > 0
+        ? await sb
+            .from("activity_log")
+            .select("entity_id, created_at, metadata")
+            .eq("org_id", currentOrg.id)
+            .eq("entity_type", "invoice")
+            .eq("action", "invoice.reminder_sent")
+            .in("entity_id", invoiceIds)
+            .order("created_at", { ascending: false })
+            .limit(200)
+        : { data: [] as ReminderActivityLike[] };
+    const reminderData = (reminderResponse.data ?? []) as ReminderActivityLike[];
     const insightMap = buildClientInsightMap(invoiceData);
     const collectionsMap = buildClientCollectionsSummaryMap(invoiceData, reminderData);
     const nextClients = ((clientRes.data ?? []) as Client[]).map((client) => ({
@@ -169,7 +193,7 @@ function ClientsPageContent() {
 
     setClients(nextClients);
     setLoading(false);
-  }, [currentOrg]);
+  }, [currentOrg, role, user?.id]);
 
   useEffect(() => {
     void fetchClients();
@@ -498,7 +522,9 @@ function ClientsPageContent() {
             Clients
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Manage account relationships, revenue concentration, and collections posture.
+            {isVendorRole(role)
+              ? "Review only the accounts assigned to your vendor seat."
+              : "Manage account relationships, revenue concentration, and collections posture."}
           </p>
         </div>
         {canCreateClients && (
@@ -831,7 +857,9 @@ function ClientsPageContent() {
               clients.length === 0
                 ? canCreateClients
                   ? "Add your first client to start sending invoices."
-                  : "Client accounts will appear here as your team adds them."
+                  : isVendorRole(role)
+                    ? "An admin needs to assign client visibility before vendor accounts appear here."
+                    : "Client accounts will appear here as your team adds them."
                 : touchFilter === "all"
                   ? "Adjust the saved view or filters to widen the account roster."
                   : "This reminder cadence filter is narrower than the current account workload."

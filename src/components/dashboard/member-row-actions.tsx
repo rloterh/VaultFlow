@@ -2,9 +2,8 @@
 
 import { ShieldAlert, ShieldCheck, Trash2, UserCog } from "lucide-react";
 import {
-  ROLE_HIERARCHY,
   ROLE_METADATA,
-  canManageRole,
+  getAssignableRoles,
   type Role,
 } from "@/config/roles";
 import { ActionMenu } from "@/components/ui/action-menu";
@@ -31,13 +30,22 @@ export function MemberRowActions({
     !!actorRole &&
     !isSelf &&
     membership.role !== "owner" &&
-    canManageRole(actorRole, membership.role);
+    getAssignableRoles(actorRole).includes(membership.role);
 
   if (!canManageMember) {
     return null;
   }
 
   async function updateRole(role: Role) {
+    if (!actorRole || !getAssignableRoles(actorRole).includes(role)) {
+      addToast({
+        type: "error",
+        title: "Role change blocked",
+        description: "That role is outside your assignment permissions.",
+      });
+      return;
+    }
+
     const supabase = getSupabaseBrowserClient();
     const { error } = await supabase
       .from("org_memberships")
@@ -93,8 +101,8 @@ export function MemberRowActions({
     await onUpdated();
   }
 
-  const assignableRoles = ROLE_HIERARCHY.filter(
-    (role) => role !== membership.role && !!actorRole && canManageRole(actorRole, role)
+  const assignableRoles = getAssignableRoles(actorRole).filter(
+    (role) => role !== membership.role
   );
 
   return (

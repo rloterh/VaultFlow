@@ -40,7 +40,13 @@ import {
   getActivitySubject,
 } from "@/lib/activity/presentation";
 import { buildClientFinancialSnapshot } from "@/lib/clients/insights";
+import {
+  fetchVendorAssignedClientIds,
+  isAssignedClient,
+  isVendorRole,
+} from "@/lib/rbac/vendor-access";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
 import type { Client, Invoice } from "@/types/database";
 
@@ -81,7 +87,8 @@ function timeAgo(value: string) {
 export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
+  const { currentOrg } = useOrgStore();
   const addToast = useUIStore((s) => s.addToast);
   const [client, setClient] = useState<Client | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -93,6 +100,21 @@ export default function ClientDetailPage() {
 
   const fetchClient = useCallback(async () => {
     const sb = getSupabaseBrowserClient();
+    if (isVendorRole(role)) {
+      const scopedClientIds = currentOrg?.id
+        ? await fetchVendorAssignedClientIds(sb, currentOrg.id, user?.id)
+        : [];
+
+      if (!isAssignedClient(id, scopedClientIds)) {
+        setClient(null);
+        setInvoices([]);
+        setActivity([]);
+        setReminders([]);
+        setLoading(false);
+        return;
+      }
+    }
+
     const [clientRes, invoiceRes] = await Promise.all([
       sb.from("clients").select("*").eq("id", id).single(),
       sb
@@ -156,7 +178,7 @@ export default function ClientDetailPage() {
     setActivity(mergedActivity);
     setReminders((reminderResponse.data ?? []) as ReminderActivityLike[]);
     setLoading(false);
-  }, [id]);
+  }, [currentOrg?.id, id, role, user?.id]);
 
   useEffect(() => {
     if (id) {
@@ -251,7 +273,7 @@ export default function ClientDetailPage() {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <h2 className="text-lg font-medium text-neutral-900 dark:text-white">
-          Client not found
+          {isVendorRole(role) ? "No assigned client found" : "Client not found"}
         </h2>
         <Link href="/dashboard/clients">
           <Button variant="ghost" className="mt-4">
@@ -537,7 +559,9 @@ export default function ClientDetailPage() {
           <Card>
             <CardTitle>Recent activity</CardTitle>
             <CardDescription>
-              Account events across client profile changes and invoice operations.
+              {isVendorRole(role)
+                ? "Assigned account events across client profile changes and invoice operations."
+                : "Account events across client profile changes and invoice operations."}
             </CardDescription>
             <div className="mt-4 space-y-4">
               {activity.length === 0 ? (

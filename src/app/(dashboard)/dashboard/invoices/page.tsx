@@ -23,6 +23,10 @@ import {
   type ReminderActivityLike,
 } from "@/lib/collections/queue";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
+import {
+  fetchVendorAssignedClientIds,
+  isVendorRole,
+} from "@/lib/rbac/vendor-access";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
@@ -72,7 +76,7 @@ export default function InvoicesPage() {
   const router = useRouter();
   const { currentOrg } = useOrgStore();
   const { user } = useAuth();
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const collectionsPreset = useUIStore((s) => s.collectionsPreset);
   const setCollectionsPreset = useUIStore((s) => s.setCollectionsPreset);
@@ -111,11 +115,30 @@ export default function InvoicesPage() {
     }
 
     const sb = getSupabaseBrowserClient();
+    const assignedClientIds = isVendorRole(role)
+      ? await fetchVendorAssignedClientIds(sb, currentOrg.id, user?.id)
+      : [];
+
+    if (isVendorRole(role) && assignedClientIds.length === 0) {
+      setInvoices([]);
+      setClients([]);
+      setReminders([]);
+      setWorkflowActivity([]);
+      setLoading(false);
+      return;
+    }
+
     let query = sb
       .from("invoices")
       .select("*, client:clients(id, name, email, company)")
       .eq("org_id", currentOrg.id)
       .order("created_at", { ascending: false });
+    let clientQuery = sb
+      .from("clients")
+      .select("*")
+      .eq("org_id", currentOrg.id)
+      .eq("is_active", true)
+      .order("name");
 
     if (status !== "all") {
       query = query.eq("status", status);
@@ -125,33 +148,37 @@ export default function InvoicesPage() {
       query = query.ilike("invoice_number", `%${search}%`);
     }
 
-    const [invoiceRes, clientRes, reminderRes, activityRes] = await Promise.all([
-      query,
-      sb
-        .from("clients")
-        .select("*")
-        .eq("org_id", currentOrg.id)
-        .eq("is_active", true)
-        .order("name"),
-      sb
-        .from("activity_log")
-        .select("entity_id, created_at, metadata")
-        .eq("org_id", currentOrg.id)
-        .eq("entity_type", "invoice")
-        .eq("action", "invoice.reminder_sent")
-        .order("created_at", { ascending: false })
-        .limit(200),
-      sb
-        .from("activity_log")
-        .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
-        .eq("org_id", currentOrg.id)
-        .eq("entity_type", "invoice")
-        .order("created_at", { ascending: false })
-        .limit(300),
-    ]);
+    if (isVendorRole(role)) {
+      query = query.in("client_id", assignedClientIds);
+      clientQuery = clientQuery.in("id", assignedClientIds);
+    }
+
+    const [invoiceRes, clientRes] = await Promise.all([query, clientQuery]);
 
     const nextInvoices = (invoiceRes.data ?? []) as Invoice[];
     const nextClients = (clientRes.data ?? []) as Client[];
+    const invoiceIds = nextInvoices.map((invoice) => invoice.id);
+    const [reminderRes, activityRes] = invoiceIds.length > 0
+      ? await Promise.all([
+          sb
+            .from("activity_log")
+            .select("entity_id, created_at, metadata")
+            .eq("org_id", currentOrg.id)
+            .eq("entity_type", "invoice")
+            .eq("action", "invoice.reminder_sent")
+            .in("entity_id", invoiceIds)
+            .order("created_at", { ascending: false })
+            .limit(200),
+          sb
+            .from("activity_log")
+            .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
+            .eq("org_id", currentOrg.id)
+            .eq("entity_type", "invoice")
+            .in("entity_id", invoiceIds)
+            .order("created_at", { ascending: false })
+            .limit(300),
+        ])
+      : [{ data: [] as ReminderActivityLike[] }, { data: [] as Array<{ entity_id: string; action: string; created_at: string; profile?: { full_name: string | null; avatar_url: string | null } | null; }> }];
 
     setInvoices(nextInvoices);
     setClients(nextClients);
@@ -169,7 +196,7 @@ export default function InvoicesPage() {
       client_id: current.client_id || nextClients[0]?.id || "",
     }));
     setLoading(false);
-  }, [currentOrg, search, status]);
+  }, [currentOrg, role, search, status, user?.id]);
 
   useEffect(() => {
     void fetchInvoices();
@@ -480,7 +507,9 @@ export default function InvoicesPage() {
             Invoices
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Create, reconcile, and operationalize your receivables workflow.
+            {isVendorRole(role)
+              ? "Review only the invoice portfolio assigned to your vendor seat."
+              : "Create, reconcile, and operationalize your receivables workflow."}
           </p>
         </div>
         {canCreateInvoices && (
@@ -743,7 +772,11 @@ export default function InvoicesPage() {
           <EmptyState
             icon={FileText}
             title="No invoices yet"
-            description="Create your first invoice to start tracking revenue."
+            description={
+              isVendorRole(role)
+                ? "An admin needs to assign client visibility before invoices will appear here."
+                : "Create your first invoice to start tracking revenue."
+            }
             actionLabel={canCreateInvoices ? "Create draft" : undefined}
             onAction={canCreateInvoices ? () => setComposerOpen(true) : undefined}
           />

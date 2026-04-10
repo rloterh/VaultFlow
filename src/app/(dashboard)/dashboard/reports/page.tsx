@@ -457,8 +457,10 @@ function ReportsContent() {
           ) : (
             <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
               {role === "manager"
-                ? "Export is reserved for admins and owners."
-                : "You can review the workspace analytics in read-only mode."}
+                ? "Export is reserved for finance managers, admins, and owners."
+                : role === "viewer"
+                  ? "You can review the workspace analytics in read-only mode."
+                  : "Export is unavailable for your current workspace role."}
             </div>
           )}
         </div>

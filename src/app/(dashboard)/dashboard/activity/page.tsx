@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Activity } from "lucide-react";
+import { AuthGuard } from "@/components/auth/auth-guard";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -43,7 +44,7 @@ function formatRelativeTime(dateStr: string): string {
   });
 }
 
-export default function ActivityPage() {
+function ActivityPageContent() {
   const { currentOrg } = useOrgStore();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -222,5 +223,13 @@ export default function ActivityPage() {
         )}
       </Card>
     </motion.div>
+  );
+}
+
+export default function ActivityPage() {
+  return (
+    <AuthGuard minRole="manager">
+      <ActivityPageContent />
+    </AuthGuard>
   );
 }
