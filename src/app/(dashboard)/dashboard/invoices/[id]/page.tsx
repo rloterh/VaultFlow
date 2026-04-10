@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
+  BellRing,
   Building2,
   CheckCircle2,
   Clock,
@@ -31,6 +32,13 @@ import {
   getInvoiceTransitions,
   transitionInvoiceStatus,
 } from "@/lib/invoices/lifecycle";
+import {
+  canRecordReminder,
+  getLatestReminderEntry,
+  getReminderEntryLabel,
+  getReminderRecommendation,
+  recordInvoiceReminder,
+} from "@/lib/invoices/follow-up";
 import { useUIStore } from "@/stores/ui-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Client, Invoice, InvoiceItem } from "@/types/database";
@@ -91,34 +99,35 @@ export default function InvoiceDetailPage() {
   const [activity, setActivity] = useState<InvoiceActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
+  const [recordingReminder, setRecordingReminder] = useState(false);
+
+  const fetchInvoice = useCallback(async () => {
+    const sb = getSupabaseBrowserClient();
+    const [invoiceRes, activityRes] = await Promise.all([
+      sb
+        .from("invoices")
+        .select("*, client:clients(*), items:invoice_items(*)")
+        .eq("id", id)
+        .single(),
+      sb
+        .from("activity_log")
+        .select("*, profile:profiles(full_name, avatar_url)")
+        .eq("entity_type", "invoice")
+        .eq("entity_id", id)
+        .order("created_at", { ascending: false })
+        .limit(10),
+    ]);
+
+    setInvoice((invoiceRes.data as InvoiceDetailRecord | null) ?? null);
+    setActivity((activityRes.data ?? []) as InvoiceActivityEntry[]);
+    setLoading(false);
+  }, [id]);
 
   useEffect(() => {
-    async function fetchInvoice() {
-      const sb = getSupabaseBrowserClient();
-      const [invoiceRes, activityRes] = await Promise.all([
-        sb
-          .from("invoices")
-          .select("*, client:clients(*), items:invoice_items(*)")
-          .eq("id", id)
-          .single(),
-        sb
-          .from("activity_log")
-          .select("*, profile:profiles(full_name, avatar_url)")
-          .eq("entity_type", "invoice")
-          .eq("entity_id", id)
-          .order("created_at", { ascending: false })
-          .limit(10),
-      ]);
-
-      setInvoice((invoiceRes.data as InvoiceDetailRecord | null) ?? null);
-      setActivity((activityRes.data ?? []) as InvoiceActivityEntry[]);
-      setLoading(false);
-    }
-
     if (id) {
       void fetchInvoice();
     }
-  }, [id]);
+  }, [fetchInvoice, id]);
 
   async function handleStatusTransition(nextStatus: Invoice["status"]) {
     if (!invoice) {
@@ -129,15 +138,7 @@ export default function InvoiceDetailPage() {
     try {
       const updated = await transitionInvoiceStatus(invoice, nextStatus, user?.id);
       setInvoice(updated);
-      const sb = getSupabaseBrowserClient();
-      const { data } = await sb
-        .from("activity_log")
-        .select("*, profile:profiles(full_name, avatar_url)")
-        .eq("entity_type", "invoice")
-        .eq("entity_id", invoice.id)
-        .order("created_at", { ascending: false })
-        .limit(10);
-      setActivity((data ?? []) as InvoiceActivityEntry[]);
+      await fetchInvoice();
       addToast({
         type: "success",
         title: `Invoice ${nextStatus}`,
@@ -155,9 +156,37 @@ export default function InvoiceDetailPage() {
     }
   }
 
+  async function handleRecordReminder() {
+    if (!invoice) {
+      return;
+    }
+
+    setRecordingReminder(true);
+    const success = await recordInvoiceReminder(invoice, user?.id);
+
+    if (!success) {
+      addToast({
+        type: "error",
+        title: "Reminder could not be recorded",
+        description: "Try again after the activity log reconnects.",
+      });
+      setRecordingReminder(false);
+      return;
+    }
+
+    await fetchInvoice();
+    addToast({
+      type: "success",
+      title: "Reminder recorded",
+      description: `A follow-up touchpoint was recorded for ${invoice.invoice_number}.`,
+    });
+    setRecordingReminder(false);
+  }
+
   const canUpdateInvoices = can("invoices:update");
   const transitions = invoice ? getInvoiceTransitions(invoice.status) : [];
   const client = invoice?.client ?? null;
+  const latestReminder = getLatestReminderEntry(activity);
   const items = useMemo(
     () => [...(invoice?.items ?? [])].sort((a, b) => a.sort_order - b.sort_order),
     [invoice?.items]
@@ -431,7 +460,7 @@ export default function InvoiceDetailPage() {
             </CardDescription>
             <div className="mt-4 space-y-3 text-sm text-neutral-600 dark:text-neutral-300">
               <div className="rounded-xl bg-neutral-50 p-3 dark:bg-neutral-800/40">
-                {getInvoiceCollectionsMessage(invoice)}
+                {getReminderRecommendation(invoice)}
               </div>
               <div className="flex items-center justify-between rounded-xl border border-neutral-200 px-3 py-2 dark:border-neutral-800">
                 <span>Outstanding balance</span>
@@ -450,6 +479,37 @@ export default function InvoiceDetailPage() {
                 <span className="font-medium text-neutral-900 dark:text-white">
                   {invoice.paid_at ? fmtDate(invoice.paid_at) : "Not paid"}
                 </span>
+              </div>
+              <div className="rounded-xl border border-neutral-200 px-3 py-3 dark:border-neutral-800">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                      {getReminderEntryLabel(latestReminder)}
+                    </p>
+                    <p className="mt-1 text-xs text-neutral-500">
+                      {latestReminder
+                        ? `${timeAgo(latestReminder.created_at)} by ${latestReminder.profile?.full_name ?? "System"}`
+                        : "No follow-up touchpoint has been logged on this invoice yet."}
+                    </p>
+                  </div>
+                  {canUpdateInvoices && canRecordReminder(invoice) ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      isLoading={recordingReminder}
+                      leftIcon={<BellRing className="h-4 w-4" />}
+                      onClick={handleRecordReminder}
+                    >
+                      Record reminder
+                    </Button>
+                  ) : (
+                    <Badge variant="outline">
+                      {invoice.status === "paid" || invoice.status === "cancelled"
+                        ? "Closed"
+                        : "Awaiting send"}
+                    </Badge>
+                  )}
+                </div>
               </div>
             </div>
           </Card>

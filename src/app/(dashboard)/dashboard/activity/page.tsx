@@ -11,6 +11,7 @@ import {
   getActivitySubject,
   getActivityTone,
 } from "@/lib/activity/presentation";
+import { isCollectionsActivityAction } from "@/lib/invoices/follow-up";
 import { useOrgStore } from "@/stores/org-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
@@ -46,7 +47,7 @@ export default function ActivityPage() {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<
-    "all" | "invoice" | "client" | "member" | "billing"
+    "all" | "invoice" | "collections" | "client" | "member" | "billing"
   >("all");
 
   useEffect(() => {
@@ -65,8 +66,11 @@ export default function ActivityPage() {
     void fetch();
   }, [currentOrg]);
 
-  const filteredEntries =
-    scope === "all" ? entries : entries.filter((entry) => entry.entity_type === scope);
+  const filteredEntries = entries.filter((entry) => {
+    if (scope === "all") return true;
+    if (scope === "collections") return isCollectionsActivityAction(entry.action);
+    return entry.entity_type === scope;
+  });
 
   return (
     <motion.div
@@ -87,6 +91,7 @@ export default function ActivityPage() {
         {[
           { label: "All activity", value: "all" as const },
           { label: "Invoices", value: "invoice" as const },
+          { label: "Collections", value: "collections" as const },
           { label: "Clients", value: "client" as const },
           { label: "Members", value: "member" as const },
           { label: "Billing", value: "billing" as const },
@@ -156,10 +161,20 @@ export default function ActivityPage() {
                     <p className="mt-0.5 text-xs text-neutral-400">
                       {formatRelativeTime(entry.created_at)}
                     </p>
+                    {entry.action === "invoice.reminder_sent" && (
+                      <p className="mt-1 text-xs text-neutral-500">
+                        {typeof entry.metadata.reminder_stage === "string"
+                          ? `${entry.metadata.reminder_stage.replace("-", " ")} follow-up`
+                          : "Collections follow-up"}{" "}
+                        {typeof entry.metadata.outstanding_balance === "number"
+                          ? `· $${Math.round(entry.metadata.outstanding_balance).toLocaleString("en-US")} outstanding`
+                          : ""}
+                      </p>
+                    )}
                   </div>
                   {color && (
                     <Badge variant={color} className="mt-1 shrink-0 capitalize">
-                      {entry.entity_type}
+                      {scope === "collections" ? "collections" : entry.entity_type}
                     </Badge>
                   )}
                 </div>

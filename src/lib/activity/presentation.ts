@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertTriangle,
+  BellRing,
   CheckCircle2,
   CreditCard,
   Edit,
@@ -32,6 +33,7 @@ const activityConfig: Record<
   "invoice.viewed": { label: "Viewed invoice", icon: Eye, tone: "info" },
   "invoice.paid": { label: "Collected payment", icon: CheckCircle2, tone: "success" },
   "invoice.overdue": { label: "Marked overdue", icon: AlertTriangle, tone: "warning" },
+  "invoice.reminder_sent": { label: "Logged reminder", icon: BellRing, tone: "info" },
   "invoice.cancelled": { label: "Cancelled invoice", icon: XCircle, tone: "danger" },
   "invoice.deleted": { label: "Deleted invoice", icon: Trash2, tone: "danger" },
   "client.created": { label: "Added client", icon: Users },

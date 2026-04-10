@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  BellRing,
   CheckCircle2,
   Copy,
   Download,
@@ -16,6 +17,12 @@ import {
   getInvoiceTransitions,
   transitionInvoiceStatus,
 } from "@/lib/invoices/lifecycle";
+import {
+  canRecordReminder,
+  getReminderStage,
+  getReminderStageLabel,
+  recordInvoiceReminder,
+} from "@/lib/invoices/follow-up";
 import { useUIStore } from "@/stores/ui-store";
 import type { Invoice, InvoiceStatus } from "@/types/database";
 
@@ -74,6 +81,26 @@ export function InvoiceRowActions({
     await onUpdated();
   }
 
+  async function recordReminder() {
+    const success = await recordInvoiceReminder(invoice, user?.id);
+
+    if (!success) {
+      addToast({
+        type: "error",
+        title: "Reminder could not be recorded",
+        description: "Try again after the activity log reconnects.",
+      });
+      return;
+    }
+
+    addToast({
+      type: "success",
+      title: getReminderStageLabel(getReminderStage(invoice)),
+      description: `A follow-up touchpoint was recorded for ${invoice.invoice_number}.`,
+    });
+    await onUpdated();
+  }
+
   const statusActions = canUpdateInvoices
     ? getInvoiceTransitions(invoice.status).map((action) => ({
         label: action.label,
@@ -109,6 +136,16 @@ export function InvoiceRowActions({
               icon: Copy,
               onSelect: () => copyValue(invoice.invoice_number, "Invoice number"),
             },
+            ...(canUpdateInvoices && canRecordReminder(invoice)
+              ? [
+                  {
+                    label: "Record reminder",
+                    description: "Log a collections follow-up against this invoice.",
+                    icon: BellRing,
+                    onSelect: () => recordReminder(),
+                  },
+                ]
+              : []),
           ],
         },
         ...(statusActions.length

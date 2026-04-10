@@ -16,6 +16,7 @@ import {
 import {
   ArrowUpRight,
   BarChart3,
+  BellRing,
   DollarSign,
   Download,
   Filter,
@@ -35,7 +36,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/badge";
 import { MetricCard } from "@/components/ui/metric-card";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
+import {
+  canRecordReminder,
+  getReminderEntryLabel,
+  getReminderRecommendation,
+  recordInvoiceReminder,
+} from "@/lib/invoices/follow-up";
 import {
   buildReportSnapshot,
   formatInvoiceStatus,
@@ -148,7 +156,25 @@ function TopClientsTooltip({
   );
 }
 
+interface ReminderActivityEntry {
+  id: string;
+  action: string;
+  entity_id: string;
+  created_at: string;
+  metadata: Record<string, unknown>;
+  profile?: { full_name: string | null };
+}
+
+function formatRelativeTime(value: string) {
+  const seconds = Math.floor((Date.now() - new Date(value).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 function ReportsContent() {
+  const { user } = useAuth();
   const { currentOrg } = useOrgStore();
   const { can, role } = usePermissions();
   const addToast = useUIStore((state) => state.addToast);
@@ -156,6 +182,8 @@ function ReportsContent() {
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [reminders, setReminders] = useState<ReminderActivityEntry[]>([]);
+  const [reminderInvoiceId, setReminderInvoiceId] = useState<string | null>(null);
   const [filters, setFilters] = useState<ReportFilters>({
     range: "90d",
     status: "all",
@@ -167,7 +195,7 @@ function ReportsContent() {
     setLoading(true);
     setError(null);
     const supabase = getSupabaseBrowserClient();
-    const [invoiceResponse, clientResponse] = await Promise.all([
+    const [invoiceResponse, clientResponse, reminderResponse] = await Promise.all([
       supabase
         .from("invoices")
         .select("*, client:clients(id, name, company)")
@@ -179,12 +207,21 @@ function ReportsContent() {
         .eq("org_id", currentOrg.id)
         .eq("is_active", true)
         .order("created_at", { ascending: false }),
+      supabase
+        .from("activity_log")
+        .select("id, action, entity_id, created_at, metadata, profile:profiles(full_name)")
+        .eq("org_id", currentOrg.id)
+        .eq("entity_type", "invoice")
+        .eq("action", "invoice.reminder_sent")
+        .order("created_at", { ascending: false })
+        .limit(100),
     ]);
 
-    if (invoiceResponse.error || clientResponse.error) {
+    if (invoiceResponse.error || clientResponse.error || reminderResponse.error) {
       const message =
         invoiceResponse.error?.message ??
         clientResponse.error?.message ??
+        reminderResponse.error?.message ??
         "Unable to load reports.";
       setError(message);
       setLoading(false);
@@ -198,6 +235,7 @@ function ReportsContent() {
 
     setInvoices((invoiceResponse.data ?? []) as Invoice[]);
     setClients((clientResponse.data ?? []) as Client[]);
+    setReminders((reminderResponse.data ?? []) as ReminderActivityEntry[]);
     setLoading(false);
   }, [addToast, currentOrg]);
 
@@ -227,6 +265,29 @@ function ReportsContent() {
       title: "Report exported",
       description: `Downloaded ${report.invoices.length} invoice${report.invoices.length === 1 ? "" : "s"} from the current view.`,
     });
+  }
+
+  async function handleRecordReminder(invoice: Invoice) {
+    setReminderInvoiceId(invoice.id);
+    const success = await recordInvoiceReminder(invoice, user?.id);
+
+    if (!success) {
+      addToast({
+        type: "error",
+        title: "Reminder could not be recorded",
+        description: "Try again after the activity log reconnects.",
+      });
+      setReminderInvoiceId(null);
+      return;
+    }
+
+    await fetchReports();
+    addToast({
+      type: "success",
+      title: "Reminder recorded",
+      description: `A follow-up touchpoint was logged for ${invoice.invoice_number}.`,
+    });
+    setReminderInvoiceId(null);
   }
 
   if (loading) {
@@ -261,6 +322,13 @@ function ReportsContent() {
       ? EMPTY_REPORT
       : buildReportSnapshot(invoices, clients, filters);
   const summary = report.summary;
+  const reminderLookup = new Map<string, ReminderActivityEntry>();
+
+  reminders.forEach((entry) => {
+    if (!reminderLookup.has(entry.entity_id)) {
+      reminderLookup.set(entry.entity_id, entry);
+    }
+  });
 
   return (
     <motion.div
@@ -495,24 +563,26 @@ function ReportsContent() {
                   </p>
                 ) : (
                   report.attentionQueue.map((entry) => (
-                    <Link
+                    <div
                       key={entry.invoice.id}
-                      href={`/dashboard/invoices/${entry.invoice.id}`}
-                      className="flex items-start justify-between rounded-xl border border-neutral-200/70 p-4 transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900/70"
+                      className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800"
                     >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-neutral-900 dark:text-white">
-                            {entry.invoice.invoice_number}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                              {entry.invoice.invoice_number}
+                            </p>
+                            <StatusBadge status={entry.invoice.status} />
+                          </div>
+                          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                            {entry.invoice.client?.name ?? "Unknown client"} &middot;{" "}
+                            {describeDueWindow(entry.daysUntilDue, entry.priority)}
                           </p>
-                          <StatusBadge status={entry.invoice.status} />
+                          <p className="mt-2 text-xs text-neutral-400">
+                            {getReminderRecommendation(entry.invoice)}
+                          </p>
                         </div>
-                        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-                          {entry.invoice.client?.name ?? "Unknown client"} &middot;{" "}
-                          {describeDueWindow(entry.daysUntilDue, entry.priority)}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3 pl-4">
                         <div className="text-right">
                           <p className="text-sm font-semibold text-neutral-900 dark:text-white">
                             {fmt(entry.outstandingAmount)}
@@ -521,9 +591,37 @@ function ReportsContent() {
                             Outstanding
                           </p>
                         </div>
-                        <ArrowUpRight className="h-4 w-4 text-neutral-400" />
                       </div>
-                    </Link>
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+                        <div className="text-xs text-neutral-400">
+                          {reminderLookup.has(entry.invoice.id)
+                            ? `${getReminderEntryLabel(reminderLookup.get(entry.invoice.id) ?? null)} ${formatRelativeTime(reminderLookup.get(entry.invoice.id)?.created_at ?? "")}`
+                            : "No reminder recorded yet"}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {can("invoices:update") && canRecordReminder(entry.invoice) && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              isLoading={reminderInvoiceId === entry.invoice.id}
+                              leftIcon={<BellRing className="h-4 w-4" />}
+                              onClick={() => handleRecordReminder(entry.invoice)}
+                            >
+                              Record reminder
+                            </Button>
+                          )}
+                          <Link href={`/dashboard/invoices/${entry.invoice.id}`}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              rightIcon={<ArrowUpRight className="h-3.5 w-3.5" />}
+                            >
+                              View invoice
+                            </Button>
+                          </Link>
+                        </div>
+                      </div>
+                    </div>
                   ))
                 )}
               </div>
