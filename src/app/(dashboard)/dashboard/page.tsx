@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import {
+  BellRing,
   DollarSign, FileText, Users, TrendingUp,
   Plus, ArrowUpRight, Clock,
 } from "lucide-react";
@@ -11,13 +12,27 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { MetricCard } from "@/components/ui/metric-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { Avatar, Skeleton } from "@/components/ui/badge";
+import { Avatar, Badge, Skeleton } from "@/components/ui/badge";
 import { RevenueChart, StatusChart } from "@/components/charts";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
 import { getActivityLabel, getActivitySubject } from "@/lib/activity/presentation";
+import {
+  buildCollectionsQueue,
+  filterCollectionsQueue,
+  formatLatestReminderStatus,
+  formatQueuePriority,
+  summarizeCollectionsQueue,
+  type CollectionsQueuePreset,
+  type ReminderActivityLike,
+} from "@/lib/collections/queue";
+import {
+  canRecordReminder,
+  recordInvoiceReminder,
+} from "@/lib/invoices/follow-up";
 import { buildReportSnapshot } from "@/lib/reports/analytics";
 import { useOrgStore } from "@/stores/org-store";
+import { useUIStore } from "@/stores/ui-store";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { ActivityEntry, Client, DashboardStats, Invoice, RevenueDataPoint, StatusDistribution } from "@/types/database";
@@ -36,15 +51,20 @@ function timeAgo(d: string) {
 }
 
 export default function DashboardPage() {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
   const permissions = usePermissions();
   const { currentOrg } = useOrgStore();
+  const addToast = useUIStore((s) => s.addToast);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>([]);
   const [statusData, setStatusData] = useState<StatusDistribution[]>([]);
   const [recent, setRecent] = useState<Invoice[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [reminders, setReminders] = useState<ReminderActivityLike[]>([]);
+  const [queuePreset, setQueuePreset] = useState<CollectionsQueuePreset>("needs-touch");
+  const [reminderInvoiceId, setReminderInvoiceId] = useState<string | null>(null);
   const [operationsPulse, setOperationsPulse] = useState(() =>
     buildReportSnapshot([], [], { range: "90d", status: "all" })
   );
@@ -52,13 +72,23 @@ export default function DashboardPage() {
   const fetchData = useCallback(async () => {
     if (!currentOrg) return;
     const sb = getSupabaseBrowserClient();
-    const [invRes, cliRes, actRes] = await Promise.all([
+    const [invRes, cliRes, actRes, reminderRes] = await Promise.all([
       sb.from("invoices").select("*, client:clients(id, name, company)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }),
       sb.from("clients").select("*").eq("org_id", currentOrg.id).eq("is_active", true),
       sb.from("activity_log").select("*, profile:profiles(full_name, avatar_url)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }).limit(8),
+      sb
+        .from("activity_log")
+        .select("entity_id, created_at, metadata")
+        .eq("org_id", currentOrg.id)
+        .eq("entity_type", "invoice")
+        .eq("action", "invoice.reminder_sent")
+        .order("created_at", { ascending: false })
+        .limit(100),
     ]);
     const invoices = (invRes.data ?? []) as Invoice[];
     const clients = (cliRes.data ?? []) as Client[];
+    setInvoices(invoices);
+    setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
     setRecent(invoices.slice(0, 5));
     setActivity((actRes.data ?? []) as ActivityEntry[]);
 
@@ -112,6 +142,41 @@ export default function DashboardPage() {
         icon: <ArrowUpRight className="h-4 w-4" />,
       };
   const biggestExposure = operationsPulse.topClients[0];
+  const collectionsQueue = useMemo(
+    () => buildCollectionsQueue(invoices, reminders),
+    [invoices, reminders]
+  );
+  const queueSummary = useMemo(
+    () => summarizeCollectionsQueue(collectionsQueue),
+    [collectionsQueue]
+  );
+  const visibleQueue = useMemo(
+    () => filterCollectionsQueue(collectionsQueue, queuePreset).slice(0, 4),
+    [collectionsQueue, queuePreset]
+  );
+
+  async function handleRecordReminder(invoice: Invoice) {
+    setReminderInvoiceId(invoice.id);
+    const success = await recordInvoiceReminder(invoice, user?.id);
+
+    if (!success) {
+      addToast({
+        type: "error",
+        title: "Reminder could not be recorded",
+        description: "Try again after the activity log reconnects.",
+      });
+      setReminderInvoiceId(null);
+      return;
+    }
+
+    await fetchData();
+    addToast({
+      type: "success",
+      title: "Reminder recorded",
+      description: `A follow-up touchpoint was logged for ${invoice.invoice_number}.`,
+    });
+    setReminderInvoiceId(null);
+  }
 
   if (loading) return (
     <div className="space-y-6">
@@ -142,12 +207,12 @@ export default function DashboardPage() {
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">Collection pulse</p>
           <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
-            {fmt(operationsPulse.summary.outstandingBalance)}
+            {fmt(queueSummary.totalOutstanding)}
           </p>
           <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
-            {operationsPulse.summary.overdueCount > 0
-              ? `${operationsPulse.summary.overdueCount} overdue invoices need follow-up in the last 90 days.`
-              : "Receivables are moving cleanly with no overdue invoices in the current pulse."}
+            {queueSummary.needsTouch > 0
+              ? `${queueSummary.needsTouch} invoices currently need a collections touchpoint.`
+              : "Receivables are moving cleanly with no urgent collections work right now."}
           </p>
           <Link href="/dashboard/reports" className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
             Review operations
@@ -180,6 +245,162 @@ export default function DashboardPage() {
           <Link href={permissions.can("invoices:create") ? "/dashboard/invoices" : "/dashboard/reports"} className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
             {permissions.can("invoices:create") ? "Manage invoices" : "Open reports"}
           </Link>
+        </Card>
+      </motion.div>
+
+      <motion.div variants={item}>
+        <Card>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-neutral-900 dark:text-white">
+                Operations board
+              </h2>
+              <p className="mt-1 text-sm text-neutral-500">
+                Queue-level visibility for what should be worked next across receivables.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { label: "Needs touch", value: "needs-touch" as const, count: queueSummary.needsTouch },
+                { label: "Overdue", value: "overdue" as const, count: queueSummary.overdue },
+                { label: "Unreminded", value: "unreminded" as const, count: queueSummary.unreminded },
+                { label: "All open", value: "all" as const, count: queueSummary.openInvoices },
+              ].map((preset) => (
+                <button
+                  key={preset.value}
+                  type="button"
+                  onClick={() => setQueuePreset(preset.value)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                    queuePreset === preset.value
+                      ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
+                      : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                  }`}
+                >
+                  {preset.label} ({preset.count})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="space-y-3">
+              {visibleQueue.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                  {queuePreset === "unreminded"
+                    ? "Every open invoice already has a logged follow-up touchpoint."
+                    : "No invoices match this queue preset right now."}
+                </div>
+              ) : (
+                visibleQueue.map((item) => (
+                  <div
+                    key={item.invoice.id}
+                    className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                            {item.invoice.invoice_number}
+                          </p>
+                          <StatusBadge status={item.invoice.status} />
+                          <Badge
+                            variant={
+                              item.priority === "critical"
+                                ? "danger"
+                                : item.priority === "high"
+                                  ? "warning"
+                                  : "outline"
+                            }
+                          >
+                            {formatQueuePriority(item.priority)}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+                          {item.clientName} &middot; {formatLatestReminderStatus(item)}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                          {fmt(item.outstandingAmount)}
+                        </p>
+                        <p className="text-xs text-neutral-400">
+                          {item.daysUntilDue < 0
+                            ? `${Math.abs(item.daysUntilDue)}d overdue`
+                            : item.daysUntilDue === 0
+                              ? "Due today"
+                              : `Due in ${item.daysUntilDue}d`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+                      <Link
+                        href={`/dashboard/invoices/${item.invoice.id}`}
+                        className="text-xs font-medium text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
+                      >
+                        Open invoice
+                      </Link>
+                      {permissions.can("invoices:update") && canRecordReminder(item.invoice) ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          isLoading={reminderInvoiceId === item.invoice.id}
+                          leftIcon={<BellRing className="h-4 w-4" />}
+                          onClick={() => handleRecordReminder(item.invoice)}
+                        >
+                          Record reminder
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-neutral-400">
+                          {permissions.can("invoices:update")
+                            ? "No reminder needed"
+                            : "Read-only queue view"}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                  Queue summary
+                </p>
+                <div className="mt-3 space-y-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-neutral-500">Open invoices</span>
+                    <span className="font-medium text-neutral-900 dark:text-white">
+                      {queueSummary.openInvoices}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-neutral-500">Need touch</span>
+                    <span className="font-medium text-neutral-900 dark:text-white">
+                      {queueSummary.needsTouch}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-neutral-500">Overdue</span>
+                    <span className="font-medium text-neutral-900 dark:text-white">
+                      {queueSummary.overdue}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-neutral-500">Without reminder</span>
+                    <span className="font-medium text-neutral-900 dark:text-white">
+                      {queueSummary.unreminded}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-neutral-200/70 p-4 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                {permissions.can("invoices:update")
+                  ? "Managers and above can log reminders directly from the dashboard queue to keep collections work moving."
+                  : "Your role can monitor queue health here, while invoice updates stay with operators."}
+              </div>
+            </div>
+          </div>
         </Card>
       </motion.div>
 

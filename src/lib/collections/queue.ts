@@ -21,6 +21,20 @@ export interface CollectionsQueueItem {
   priority: "critical" | "high" | "monitor";
 }
 
+export type CollectionsQueuePreset =
+  | "all"
+  | "needs-touch"
+  | "overdue"
+  | "unreminded";
+
+export interface CollectionsQueueSummary {
+  openInvoices: number;
+  needsTouch: number;
+  overdue: number;
+  unreminded: number;
+  totalOutstanding: number;
+}
+
 function startOfDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
@@ -121,6 +135,38 @@ export function buildCollectionsQueue(
         right.outstandingAmount - left.outstandingAmount
       );
     });
+}
+
+export function filterCollectionsQueue(
+  items: CollectionsQueueItem[],
+  preset: CollectionsQueuePreset
+) {
+  switch (preset) {
+    case "needs-touch":
+      return items.filter((item) => item.priority !== "monitor");
+    case "overdue":
+      return items.filter((item) => item.invoice.status === "overdue");
+    case "unreminded":
+      return items.filter((item) => item.reminderCount === 0);
+    case "all":
+    default:
+      return items;
+  }
+}
+
+export function summarizeCollectionsQueue(
+  items: CollectionsQueueItem[]
+): CollectionsQueueSummary {
+  return {
+    openInvoices: items.length,
+    needsTouch: items.filter((item) => item.priority !== "monitor").length,
+    overdue: items.filter((item) => item.invoice.status === "overdue").length,
+    unreminded: items.filter((item) => item.reminderCount === 0).length,
+    totalOutstanding: items.reduce(
+      (sum, item) => sum + item.outstandingAmount,
+      0
+    ),
+  };
 }
 
 export function formatQueuePriority(priority: CollectionsQueueItem["priority"]) {

@@ -33,11 +33,19 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/badge";
+import { Badge, Skeleton } from "@/components/ui/badge";
 import { MetricCard } from "@/components/ui/metric-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
+import {
+  buildCollectionsQueue,
+  filterCollectionsQueue,
+  formatLatestReminderStatus,
+  formatQueuePriority,
+  summarizeCollectionsQueue,
+  type CollectionsQueuePreset,
+} from "@/lib/collections/queue";
 import {
   canRecordReminder,
   getReminderEntryLabel,
@@ -184,6 +192,7 @@ function ReportsContent() {
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<ReminderActivityEntry[]>([]);
   const [reminderInvoiceId, setReminderInvoiceId] = useState<string | null>(null);
+  const [queuePreset, setQueuePreset] = useState<CollectionsQueuePreset>("needs-touch");
   const [filters, setFilters] = useState<ReportFilters>({
     range: "90d",
     status: "all",
@@ -323,6 +332,9 @@ function ReportsContent() {
       : buildReportSnapshot(invoices, clients, filters);
   const summary = report.summary;
   const reminderLookup = new Map<string, ReminderActivityEntry>();
+  const collectionsQueue = buildCollectionsQueue(report.invoices, reminders);
+  const queueSummary = summarizeCollectionsQueue(collectionsQueue);
+  const visibleQueue = filterCollectionsQueue(collectionsQueue, queuePreset);
 
   reminders.forEach((entry) => {
     if (!reminderLookup.has(entry.entity_id)) {
@@ -556,36 +568,68 @@ function ReportsContent() {
                   The invoices most likely to need follow-up next.
                 </CardDescription>
               </CardHeader>
-              <div className="mt-4 space-y-3">
-                {report.attentionQueue.length === 0 ? (
+              <div className="mt-4 space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { label: "Needs touch", value: "needs-touch" as const, count: queueSummary.needsTouch },
+                    { label: "Overdue", value: "overdue" as const, count: queueSummary.overdue },
+                    { label: "Unreminded", value: "unreminded" as const, count: queueSummary.unreminded },
+                    { label: "All open", value: "all" as const, count: queueSummary.openInvoices },
+                  ].map((preset) => (
+                    <button
+                      key={preset.value}
+                      type="button"
+                      onClick={() => setQueuePreset(preset.value)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                        queuePreset === preset.value
+                          ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
+                          : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                      }`}
+                    >
+                      {preset.label} ({preset.count})
+                    </button>
+                  ))}
+                </div>
+                {visibleQueue.length === 0 ? (
                   <p className="py-6 text-center text-sm text-neutral-400">
-                    No open receivables are showing up in this report.
+                    No open receivables are showing up for this queue preset.
                   </p>
                 ) : (
-                  report.attentionQueue.map((entry) => (
+                  visibleQueue.map((item) => (
                     <div
-                      key={entry.invoice.id}
+                      key={item.invoice.id}
                       className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="text-sm font-semibold text-neutral-900 dark:text-white">
-                              {entry.invoice.invoice_number}
+                              {item.invoice.invoice_number}
                             </p>
-                            <StatusBadge status={entry.invoice.status} />
+                            <StatusBadge status={item.invoice.status} />
+                            <Badge
+                              variant={
+                                item.priority === "critical"
+                                  ? "danger"
+                                  : item.priority === "high"
+                                    ? "warning"
+                                    : "outline"
+                              }
+                            >
+                              {formatQueuePriority(item.priority)}
+                            </Badge>
                           </div>
                           <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-                            {entry.invoice.client?.name ?? "Unknown client"} &middot;{" "}
-                            {describeDueWindow(entry.daysUntilDue, entry.priority)}
+                            {item.invoice.client?.name ?? "Unknown client"} &middot;{" "}
+                            {describeDueWindow(item.daysUntilDue, item.invoice.status === "overdue" ? "overdue" : item.daysUntilDue <= 7 ? "due-soon" : "open")}
                           </p>
                           <p className="mt-2 text-xs text-neutral-400">
-                            {getReminderRecommendation(entry.invoice)}
+                            {getReminderRecommendation(item.invoice)}
                           </p>
                         </div>
                         <div className="text-right">
                           <p className="text-sm font-semibold text-neutral-900 dark:text-white">
-                            {fmt(entry.outstandingAmount)}
+                            {fmt(item.outstandingAmount)}
                           </p>
                           <p className="text-xs uppercase tracking-[0.14em] text-neutral-400">
                             Outstanding
@@ -594,23 +638,23 @@ function ReportsContent() {
                       </div>
                       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3 dark:border-neutral-800">
                         <div className="text-xs text-neutral-400">
-                          {reminderLookup.has(entry.invoice.id)
-                            ? `${getReminderEntryLabel(reminderLookup.get(entry.invoice.id) ?? null)} ${formatRelativeTime(reminderLookup.get(entry.invoice.id)?.created_at ?? "")}`
-                            : "No reminder recorded yet"}
+                          {reminderLookup.has(item.invoice.id)
+                            ? `${getReminderEntryLabel(reminderLookup.get(item.invoice.id) ?? null)} ${formatRelativeTime(reminderLookup.get(item.invoice.id)?.created_at ?? "")}`
+                            : formatLatestReminderStatus(item)}
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                          {can("invoices:update") && canRecordReminder(entry.invoice) && (
+                          {can("invoices:update") && canRecordReminder(item.invoice) && (
                             <Button
                               size="sm"
                               variant="outline"
-                              isLoading={reminderInvoiceId === entry.invoice.id}
+                              isLoading={reminderInvoiceId === item.invoice.id}
                               leftIcon={<BellRing className="h-4 w-4" />}
-                              onClick={() => handleRecordReminder(entry.invoice)}
+                              onClick={() => handleRecordReminder(item.invoice)}
                             >
                               Record reminder
                             </Button>
                           )}
-                          <Link href={`/dashboard/invoices/${entry.invoice.id}`}>
+                          <Link href={`/dashboard/invoices/${item.invoice.id}`}>
                             <Button
                               size="sm"
                               variant="ghost"
