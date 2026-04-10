@@ -1,8 +1,8 @@
 "use client";
 
 import {
+  AlertTriangle,
   CheckCircle2,
-  CircleDashed,
   Copy,
   Download,
   Eye,
@@ -10,8 +10,12 @@ import {
   XCircle,
 } from "lucide-react";
 import { ActionMenu } from "@/components/ui/action-menu";
+import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import {
+  getInvoiceTransitions,
+  transitionInvoiceStatus,
+} from "@/lib/invoices/lifecycle";
 import { useUIStore } from "@/stores/ui-store";
 import type { Invoice, InvoiceStatus } from "@/types/database";
 
@@ -20,10 +24,20 @@ interface InvoiceRowActionsProps {
   onUpdated: () => void | Promise<void>;
 }
 
+const statusIconMap: Record<InvoiceStatus, typeof Send> = {
+  draft: Eye,
+  sent: Send,
+  viewed: Eye,
+  paid: CheckCircle2,
+  overdue: AlertTriangle,
+  cancelled: XCircle,
+};
+
 export function InvoiceRowActions({
   invoice,
   onUpdated,
 }: InvoiceRowActionsProps) {
+  const { user } = useAuth();
   const { can } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const canUpdateInvoices = can("invoices:update");
@@ -38,27 +52,16 @@ export function InvoiceRowActions({
   }
 
   async function updateStatus(status: InvoiceStatus) {
-    const supabase = getSupabaseBrowserClient();
-    const updates: Record<string, string | null> = { status };
-
-    if (status === "sent") {
-      updates.sent_at = new Date().toISOString();
-    }
-
-    if (status === "paid") {
-      updates.paid_at = new Date().toISOString();
-    }
-
-    const { error } = await supabase
-      .from("invoices")
-      .update(updates)
-      .eq("id", invoice.id);
-
-    if (error) {
+    try {
+      await transitionInvoiceStatus(invoice, status, user?.id);
+    } catch (error) {
       addToast({
         type: "error",
         title: "Invoice update failed",
-        description: error.message,
+        description:
+          error instanceof Error
+            ? error.message
+            : "The invoice could not be updated.",
       });
       return;
     }
@@ -71,47 +74,15 @@ export function InvoiceRowActions({
     await onUpdated();
   }
 
-  const statusActions = [];
-
-  if (canUpdateInvoices && invoice.status === "draft") {
-    statusActions.push({
-      label: "Send invoice",
-      description: "Set the invoice live and stamp the sent date.",
-      icon: Send,
-      onSelect: () => updateStatus("sent"),
-    });
-  }
-
-  if (
-    canUpdateInvoices &&
-    ["sent", "viewed", "overdue"].includes(invoice.status)
-  ) {
-    statusActions.push({
-      label: "Mark as paid",
-      description: "Close the balance and record a payment timestamp.",
-      icon: CheckCircle2,
-      onSelect: () => updateStatus("paid"),
-    });
-  }
-
-  if (canUpdateInvoices && ["draft", "sent", "viewed"].includes(invoice.status)) {
-    statusActions.push({
-      label: "Mark overdue",
-      description: "Flag the invoice for collections attention.",
-      icon: CircleDashed,
-      onSelect: () => updateStatus("overdue"),
-    });
-  }
-
-  if (canUpdateInvoices && invoice.status !== "cancelled" && invoice.status !== "paid") {
-    statusActions.push({
-      label: "Cancel invoice",
-      description: "Stop further follow-up on this invoice.",
-      icon: XCircle,
-      tone: "danger" as const,
-      onSelect: () => updateStatus("cancelled"),
-    });
-  }
+  const statusActions = canUpdateInvoices
+    ? getInvoiceTransitions(invoice.status).map((action) => ({
+        label: action.label,
+        description: action.description,
+        icon: statusIconMap[action.status],
+        tone: action.tone,
+        onSelect: () => updateStatus(action.status),
+      }))
+    : [];
 
   return (
     <ActionMenu

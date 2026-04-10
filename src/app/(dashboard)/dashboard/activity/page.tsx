@@ -2,61 +2,29 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Activity, FileText, Users, CreditCard, Settings, UserPlus, Trash2, Edit, Send, Eye } from "lucide-react";
+import { Activity } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  getActivityIcon,
+  getActivityLabel,
+  getActivitySubject,
+  getActivityTone,
+} from "@/lib/activity/presentation";
 import { useOrgStore } from "@/stores/org-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 interface ActivityEntry {
   id: string;
   org_id: string;
-  actor_id: string;
+  user_id: string | null;
   action: string;
   entity_type: string;
   entity_id: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
-  actor?: { full_name: string; email: string };
+  profile?: { full_name: string | null; email: string | null };
 }
-
-const actionIcons: Record<string, typeof Activity> = {
-  "invoice.created": FileText,
-  "invoice.sent": Send,
-  "invoice.viewed": Eye,
-  "invoice.paid": CreditCard,
-  "invoice.deleted": Trash2,
-  "client.created": Users,
-  "client.updated": Edit,
-  "member.invited": UserPlus,
-  "member.removed": Trash2,
-  "member.role_changed": Users,
-  "org.updated": Settings,
-};
-
-const actionLabels: Record<string, string> = {
-  "invoice.created": "Created invoice",
-  "invoice.sent": "Sent invoice",
-  "invoice.viewed": "Invoice viewed",
-  "invoice.paid": "Invoice paid",
-  "invoice.deleted": "Deleted invoice",
-  "client.created": "Added client",
-  "client.updated": "Updated client",
-  "member.invited": "Invited member",
-  "member.removed": "Removed member",
-  "member.role_changed": "Changed role",
-  "org.updated": "Updated settings",
-};
-
-type ActivityBadgeVariant = "success" | "info" | "danger";
-
-const actionColors: Record<string, ActivityBadgeVariant> = {
-  "invoice.paid": "success",
-  "invoice.sent": "info",
-  "invoice.deleted": "danger",
-  "member.removed": "danger",
-  "member.invited": "info",
-};
 
 function formatRelativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -67,13 +35,19 @@ function formatRelativeTime(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 export default function ActivityPage() {
   const { currentOrg } = useOrgStore();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [scope, setScope] = useState<
+    "all" | "invoice" | "client" | "member" | "billing"
+  >("all");
 
   useEffect(() => {
     async function fetch() {
@@ -81,21 +55,55 @@ export default function ActivityPage() {
       const sb = getSupabaseBrowserClient();
       const { data } = await sb
         .from("activity_log")
-        .select("*, actor:profiles(full_name, email)")
+        .select("*, profile:profiles(full_name, email)")
         .eq("org_id", currentOrg.id)
         .order("created_at", { ascending: false })
         .limit(50);
       setEntries((data ?? []) as ActivityEntry[]);
       setLoading(false);
     }
-    fetch();
+    void fetch();
   }, [currentOrg]);
 
+  const filteredEntries =
+    scope === "all" ? entries : entries.filter((entry) => entry.entity_type === scope);
+
   return (
-    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-6"
+    >
       <div>
-        <h1 className="text-2xl font-semibold text-neutral-900 dark:text-white">Activity log</h1>
-        <p className="mt-1 text-sm text-neutral-500">Recent actions across your organization.</p>
+        <h1 className="text-2xl font-semibold text-neutral-900 dark:text-white">
+          Activity log
+        </h1>
+        <p className="mt-1 text-sm text-neutral-500">
+          Recent actions across your organization.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {[
+          { label: "All activity", value: "all" as const },
+          { label: "Invoices", value: "invoice" as const },
+          { label: "Clients", value: "client" as const },
+          { label: "Members", value: "member" as const },
+          { label: "Billing", value: "billing" as const },
+        ].map((filter) => (
+          <button
+            key={filter.value}
+            type="button"
+            onClick={() => setScope(filter.value)}
+            className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
+              scope === filter.value
+                ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
+                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+            }`}
+          >
+            {filter.label}
+          </button>
+        ))}
       </div>
 
       <Card>
@@ -111,36 +119,49 @@ export default function ActivityPage() {
               </div>
             ))}
           </div>
-        ) : entries.length === 0 ? (
+        ) : filteredEntries.length === 0 ? (
           <div className="py-12 text-center">
             <Activity className="mx-auto mb-3 h-8 w-8 text-neutral-300" />
-            <p className="text-sm text-neutral-500">No activity recorded yet.</p>
-            <p className="mt-1 text-xs text-neutral-400">Actions like creating invoices and managing team members will appear here.</p>
+            <p className="text-sm text-neutral-500">
+              No activity recorded for this view.
+            </p>
+            <p className="mt-1 text-xs text-neutral-400">
+              Try another filter or come back after the next operational action.
+            </p>
           </div>
         ) : (
           <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
-            {entries.map((entry) => {
-              const Icon = actionIcons[entry.action] ?? Activity;
-              const label = actionLabels[entry.action] ?? entry.action;
-              const color = actionColors[entry.action];
-              const actorName = entry.actor?.full_name || entry.actor?.email || "System";
-              const metadata = entry.metadata as { name?: string; email?: string; number?: string };
-              const detail = metadata.name || metadata.email || metadata.number || "";
+            {filteredEntries.map((entry) => {
+              const Icon = getActivityIcon(entry.action);
+              const label = getActivityLabel(entry.action);
+              const color = getActivityTone(entry.action);
+              const actorName =
+                entry.profile?.full_name || entry.profile?.email || "System";
+              const detail = getActivitySubject(entry);
 
               return (
-                <div key={entry.id} className="flex items-start gap-4 py-4 first:pt-0 last:pb-0">
+                <div
+                  key={entry.id}
+                  className="flex items-start gap-4 py-4 first:pt-0 last:pb-0"
+                >
                   <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-800">
                     <Icon className="h-3.5 w-3.5 text-neutral-500" />
                   </div>
-                  <div className="flex-1 min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="text-sm text-neutral-900 dark:text-white">
                       <span className="font-medium">{actorName}</span>{" "}
                       <span className="text-neutral-500">{label.toLowerCase()}</span>
                       {detail && <span className="font-medium"> {detail}</span>}
                     </p>
-                    <p className="mt-0.5 text-xs text-neutral-400">{formatRelativeTime(entry.created_at)}</p>
+                    <p className="mt-0.5 text-xs text-neutral-400">
+                      {formatRelativeTime(entry.created_at)}
+                    </p>
                   </div>
-                  {color && <Badge variant={color} className="mt-1 shrink-0">{label.split(" ").pop()}</Badge>}
+                  {color && (
+                    <Badge variant={color} className="mt-1 shrink-0 capitalize">
+                      {entry.entity_type}
+                    </Badge>
+                  )}
                 </div>
               );
             })}

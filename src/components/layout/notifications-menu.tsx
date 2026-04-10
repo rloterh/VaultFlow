@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, Clock3 } from "lucide-react";
 import { ActionMenu, type ActionMenuSection } from "@/components/ui/action-menu";
+import { getActivityHeadline } from "@/lib/activity/presentation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
 import type { ActivityEntry } from "@/types/database";
@@ -13,16 +14,6 @@ function timeAgo(value: string) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-function humanizeAction(entry: ActivityEntry) {
-  const metadata = (entry.metadata ?? {}) as Record<string, unknown>;
-  const subject =
-    typeof metadata.invoice_number === "string"
-      ? metadata.invoice_number
-      : entry.entity_type;
-
-  return `${entry.action.replace(/_/g, " ")} ${subject}`;
 }
 
 export function NotificationsMenu() {
@@ -61,7 +52,7 @@ export function NotificationsMenu() {
           {
             label: "Recent activity",
             items: entries.map((entry) => ({
-              label: humanizeAction(entry),
+              label: getActivityHeadline(entry),
               description: `${entry.profile?.full_name ?? "System"} - ${timeAgo(entry.created_at)}`,
               href: "/dashboard/activity",
               icon: Clock3,

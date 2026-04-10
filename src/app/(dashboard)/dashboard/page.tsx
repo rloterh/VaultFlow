@@ -14,10 +14,11 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Avatar, Skeleton } from "@/components/ui/badge";
 import { RevenueChart, StatusChart } from "@/components/charts";
 import { useAuth } from "@/hooks/use-auth";
+import { getActivityLabel, getActivitySubject } from "@/lib/activity/presentation";
 import { useOrgStore } from "@/stores/org-store";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import type { DashboardStats, RevenueDataPoint, StatusDistribution, Invoice, ActivityEntry } from "@/types/database";
+import type { ActivityEntry, Client, DashboardStats, Invoice, RevenueDataPoint, StatusDistribution } from "@/types/database";
 
 const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.06 } } };
 const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] as [number, number, number, number] } } };
@@ -77,7 +78,13 @@ export default function DashboardPage() {
 
     const smap = new Map<string, { count: number; amount: number }>();
     invoices.forEach(inv => { const e = smap.get(inv.status) ?? { count: 0, amount: 0 }; e.count++; e.amount += Number(inv.total); smap.set(inv.status, e); });
-    setStatusData(Array.from(smap.entries()).map(([status, d]) => ({ status: status as any, count: d.count, amount: d.amount })));
+    setStatusData(
+      Array.from(smap.entries()).map(([currentStatus, d]) => ({
+        status: currentStatus as Invoice["status"],
+        count: d.count,
+        amount: d.amount,
+      }))
+    );
     setLoading(false);
   }, [currentOrg]);
 
@@ -130,7 +137,7 @@ export default function DashboardPage() {
             <div className="mt-4 divide-y divide-neutral-100 dark:divide-neutral-800">
               {recent.map(inv => (
                 <Link key={inv.id} href={`/dashboard/invoices/${inv.id}`} className="flex items-center justify-between px-5 py-3 transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-800/30">
-                  <div><p className="text-sm font-medium text-neutral-900 dark:text-white">{inv.invoice_number}</p><p className="text-xs text-neutral-500">{(inv.client as any)?.name} &middot; {fmtDate(inv.issue_date)}</p></div>
+                  <div><p className="text-sm font-medium text-neutral-900 dark:text-white">{inv.invoice_number}</p><p className="text-xs text-neutral-500">{(inv.client as Client | undefined)?.name ?? "Unknown client"} &middot; {fmtDate(inv.issue_date)}</p></div>
                   <div className="flex items-center gap-3"><StatusBadge status={inv.status} /><span className="text-sm font-medium text-neutral-900 dark:text-white">{fmt(Number(inv.total))}</span></div>
                 </Link>
               ))}
@@ -146,7 +153,7 @@ export default function DashboardPage() {
                 <div key={e.id} className="flex items-start gap-3 px-5 py-3">
                   <Avatar name={e.profile?.full_name} src={e.profile?.avatar_url} size="sm" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-neutral-700 dark:text-neutral-300"><span className="font-medium">{e.profile?.full_name ?? "System"}</span> {e.action.replace(/_/g, " ")} <span className="font-medium">{(e.metadata as any)?.invoice_number ?? e.entity_type}</span></p>
+                    <p className="text-sm text-neutral-700 dark:text-neutral-300"><span className="font-medium">{e.profile?.full_name ?? "System"}</span> <span>{getActivityLabel(e.action).toLowerCase()}</span> <span className="font-medium">{getActivitySubject(e)}</span></p>
                     <p className="mt-0.5 flex items-center gap-1 text-xs text-neutral-400"><Clock className="h-3 w-3" />{timeAgo(e.created_at)}</p>
                   </div>
                 </div>

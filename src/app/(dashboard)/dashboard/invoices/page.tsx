@@ -13,6 +13,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useAuth } from "@/hooks/use-auth";
+import { recordActivity } from "@/lib/activity/log";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
@@ -23,8 +24,10 @@ const statuses: { label: string; value: InvoiceStatus | "all" }[] = [
   { label: "All", value: "all" },
   { label: "Draft", value: "draft" },
   { label: "Sent", value: "sent" },
+  { label: "Viewed", value: "viewed" },
   { label: "Paid", value: "paid" },
   { label: "Overdue", value: "overdue" },
+  { label: "Cancelled", value: "cancelled" },
 ];
 
 function fmt(n: number) {
@@ -64,7 +67,9 @@ export default function InvoicesPage() {
     client_id: "",
     invoice_number: buildInvoiceNumber(),
     issue_date: new Date().toISOString().slice(0, 10),
-    due_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10),
+    due_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30)
+      .toISOString()
+      .slice(0, 10),
     subtotal: "0",
     tax_rate: "0",
     notes: "",
@@ -102,6 +107,7 @@ export default function InvoicesPage() {
 
     const nextInvoices = (invoiceRes.data ?? []) as Invoice[];
     const nextClients = (clientRes.data ?? []) as Client[];
+
     setInvoices(nextInvoices);
     setClients(nextClients);
     setDraftForm((current) => ({
@@ -165,13 +171,32 @@ export default function InvoicesPage() {
       title: "Draft invoice created",
       description: `${draftForm.invoice_number} is ready for review.`,
     });
+
+    if (data?.id) {
+      const selectedClient = clients.find((client) => client.id === draftForm.client_id);
+      await recordActivity({
+        orgId: currentOrg.id,
+        userId: user.id,
+        entityType: "invoice",
+        entityId: data.id,
+        action: "invoice.created",
+        metadata: {
+          invoice_number: draftForm.invoice_number,
+          client_name: selectedClient?.name ?? null,
+          total,
+        },
+      });
+    }
+
     setSaving(false);
     setComposerOpen(false);
     setDraftForm({
       client_id: clients[0]?.id || "",
       invoice_number: buildInvoiceNumber(),
       issue_date: new Date().toISOString().slice(0, 10),
-      due_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10),
+      due_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30)
+        .toISOString()
+        .slice(0, 10),
       subtotal: "0",
       tax_rate: "0",
       notes: "",
@@ -216,7 +241,7 @@ export default function InvoicesPage() {
       render: (row) => (
         <div>
           <p className="text-neutral-900 dark:text-white">
-            {(row.client as Client | undefined)?.name ?? "—"}
+            {(row.client as Client | undefined)?.name ?? "-"}
           </p>
           <p className="text-xs text-neutral-500">
             {(row.client as Client | undefined)?.company ?? ""}
@@ -314,7 +339,9 @@ export default function InvoicesPage() {
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
             {metrics.total}
           </p>
-          <p className="mt-1 text-sm text-neutral-500">Tracked invoices in the current view.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Tracked invoices in the current view.
+          </p>
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
@@ -323,7 +350,9 @@ export default function InvoicesPage() {
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
             {metrics.draft}
           </p>
-          <p className="mt-1 text-sm text-neutral-500">Documents still waiting for send-off.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Documents still waiting for send-off.
+          </p>
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
@@ -332,7 +361,9 @@ export default function InvoicesPage() {
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
             {fmt(metrics.outstanding)}
           </p>
-          <p className="mt-1 text-sm text-neutral-500">Open exposure still in collections motion.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Open exposure still in collections motion.
+          </p>
         </Card>
         <Card>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
@@ -341,7 +372,9 @@ export default function InvoicesPage() {
           <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
             {fmt(metrics.paid)}
           </p>
-          <p className="mt-1 text-sm text-neutral-500">Closed revenue already converted to cash.</p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Closed revenue already converted to cash.
+          </p>
         </Card>
       </div>
 
@@ -375,7 +408,7 @@ export default function InvoicesPage() {
                   {clients.map((client) => (
                     <option key={client.id} value={client.id}>
                       {client.name}
-                      {client.company ? ` · ${client.company}` : ""}
+                      {client.company ? ` - ${client.company}` : ""}
                     </option>
                   ))}
                 </select>
@@ -462,7 +495,7 @@ export default function InvoicesPage() {
                 />
               </div>
             </div>
-            <div className="lg:col-span-2 flex justify-end">
+            <div className="flex justify-end lg:col-span-2">
               <Button type="submit" isLoading={saving}>
                 Save draft invoice
               </Button>
