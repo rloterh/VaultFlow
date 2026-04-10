@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Building2, Bell, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Building2, Bell, Shield, Trash2 } from "lucide-react";
 import { Card, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,13 +12,15 @@ import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { usePermissions } from "@/hooks/use-permissions";
+import { ROLE_METADATA } from "@/config/roles";
 
 export default function SettingsPage() {
-  const { profile } = useAuth();
-  const { currentOrg } = useOrgStore();
-  const { can } = usePermissions();
+  const { profile, currentRole } = useAuth();
+  const { currentOrg, members } = useOrgStore();
+  const { can, role } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const canEdit = can("settings:update");
+  const roleMetadata = currentRole ? ROLE_METADATA[currentRole] : null;
 
   const [orgForm, setOrgForm] = useState({
     name: currentOrg?.name ?? "",
@@ -64,6 +67,65 @@ export default function SettingsPage() {
         <h1 className="text-2xl font-semibold text-neutral-900 dark:text-white">Settings</h1>
         <p className="mt-1 text-sm text-neutral-500">Manage your account and organization.</p>
       </div>
+
+      <Card>
+        <div className="flex items-center gap-2">
+          <Shield className="h-4 w-4 text-neutral-400" />
+          <CardTitle>Access overview</CardTitle>
+        </div>
+        <CardDescription>
+          Understand what your current role can do and jump to the right control surface quickly.
+        </CardDescription>
+        <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_auto]">
+          <div>
+            <p className="text-sm font-medium text-neutral-900 dark:text-white">
+              {roleMetadata?.title ?? "Workspace member"}
+            </p>
+            <p className="mt-1 text-sm text-neutral-500">
+              {roleMetadata?.description ?? "Your access is scoped by the workspace role assigned to you."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(roleMetadata?.capabilities ?? []).map((capability) => (
+                <span
+                  key={capability}
+                  className="rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                >
+                  {capability}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            {role && ["admin", "owner"].includes(role) && (
+              <Link href="/settings/team" className="block">
+                <Button variant="outline" className="w-full">
+                  Open team access
+                </Button>
+              </Link>
+            )}
+            {role && ["admin", "owner"].includes(role) && (
+              <Link href="/dashboard/admin" className="block">
+                <Button variant="ghost" className="w-full">
+                  Open admin overview
+                </Button>
+              </Link>
+            )}
+            <Link href="/settings/billing" className="block">
+              <Button variant="ghost" className="w-full">
+                Open billing settings
+              </Button>
+            </Link>
+          </div>
+        </div>
+        {currentOrg && (
+          <p className="mt-4 text-xs text-neutral-400">
+            {members.length} active team seat{members.length === 1 ? "" : "s"} in {currentOrg.name}.{" "}
+            {canEdit
+              ? "You can update workspace settings from here."
+              : "Workspace changes stay with admins and owners."}
+          </p>
+        )}
+      </Card>
 
       {/* Profile */}
       <Card>

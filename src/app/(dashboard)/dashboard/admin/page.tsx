@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { MemberRowActions } from "@/components/dashboard/member-row-actions";
+import { RolePolicyMatrix } from "@/components/dashboard/role-policy-matrix";
 import { Badge, Avatar, Skeleton } from "@/components/ui/badge";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
@@ -20,6 +21,7 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { useAuth } from "@/hooks/use-auth";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
+import { ROLE_METADATA } from "@/config/roles";
 import type { OrgMembership } from "@/types/auth";
 
 function fmt(n: number) {
@@ -133,7 +135,10 @@ function AdminContent() {
       sortable: true,
       width: "120px",
       render: (row) => (
-        <Badge variant={roleBadgeVariant[row.role] ?? "default"}>{row.role}</Badge>
+        <div className="space-y-1">
+          <Badge variant={roleBadgeVariant[row.role] ?? "default"}>{row.role}</Badge>
+          <p className="text-xs text-neutral-400">{ROLE_METADATA[row.role].title}</p>
+        </div>
       ),
     },
     {
@@ -315,6 +320,40 @@ function AdminContent() {
           iconColor="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400"
           index={3}
         />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+        <RolePolicyMatrix currentRole={currentRole} compact />
+        <Card>
+          <CardTitle>Access posture</CardTitle>
+          <CardDescription>
+            Keep invite, privilege, and team structure aligned with how the workspace actually operates.
+          </CardDescription>
+          <div className="mt-5 space-y-4 text-sm">
+            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+              <p className="font-medium text-neutral-900 dark:text-white">
+                {stats.pendingInvites} invite{stats.pendingInvites === 1 ? "" : "s"} pending
+              </p>
+              <p className="mt-1 text-neutral-500">
+                Clear stale invites and keep role assignments deliberate as the team scales.
+              </p>
+            </div>
+            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+              <p className="font-medium text-neutral-900 dark:text-white">
+                {members.filter((member) => member.role === "manager").length} operational manager seat{members.filter((member) => member.role === "manager").length === 1 ? "" : "s"}
+              </p>
+              <p className="mt-1 text-neutral-500">
+                Managers own day-to-day finance operations without the full admin blast radius.
+              </p>
+            </div>
+            <Link
+              href="/settings/team"
+              className="inline-flex text-sm font-medium text-neutral-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400"
+            >
+              Open team lifecycle controls
+            </Link>
+          </div>
+        </Card>
       </div>
 
       <DataTable

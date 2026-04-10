@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Clock3, Mail, UserPlus } from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { MemberRowActions } from "@/components/dashboard/member-row-actions";
+import { RolePolicyMatrix } from "@/components/dashboard/role-policy-matrix";
 import { Badge, Avatar, Skeleton } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
@@ -13,7 +14,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
-import type { Role } from "@/config/roles";
+import { ROLE_METADATA, type Role } from "@/config/roles";
 
 type PendingInvite = {
   id: string;
@@ -48,6 +49,12 @@ function TeamContent() {
     email: "",
     role: "member",
   });
+  const expiringInvites = pendingInvites.filter((invite) => {
+    const msUntilExpiry = new Date(invite.expires_at).getTime() - Date.now();
+    return msUntilExpiry > 0 && msUntilExpiry <= 1000 * 60 * 60 * 24 * 3;
+  }).length;
+  const managersPlus = members.filter((member) => ["manager", "admin", "owner"].includes(member.role)).length;
+  const membersOnly = members.filter((member) => member.role === "member").length;
 
   const fetchData = useCallback(async () => {
     if (!currentOrg) {
@@ -245,6 +252,44 @@ function TeamContent() {
         </Card>
       </div>
 
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Invite pressure
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {expiringInvites}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Pending invites expiring within the next 72 hours.
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Operator leads
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {managersPlus}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Seats with operational ownership or governance authority.
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Standard members
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {membersOnly}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">
+            Monitoring-oriented collaborators in the workspace.
+          </p>
+        </Card>
+      </div>
+
+      <RolePolicyMatrix currentRole={currentRole} />
+
       <Card padding="none">
         <div className="border-b border-neutral-100 p-5 dark:border-neutral-800">
           <CardTitle className="text-base">Member access</CardTitle>
@@ -287,7 +332,12 @@ function TeamContent() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <Badge variant={roleBadgeVariant[member.role]}>{member.role}</Badge>
+                  <div className="text-right">
+                    <Badge variant={roleBadgeVariant[member.role]}>{member.role}</Badge>
+                    <p className="mt-1 text-xs text-neutral-400">
+                      {ROLE_METADATA[member.role].title}
+                    </p>
+                  </div>
                   <MemberRowActions
                     membership={member}
                     actorRole={currentRole}
