@@ -16,7 +16,17 @@ interface StatusChartProps {
   data: StatusDistribution[];
 }
 
-function CustomTooltip({ active, payload }: any) {
+interface StatusTooltipPayload {
+  payload: StatusDistribution;
+}
+
+function CustomTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: StatusTooltipPayload[];
+}) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (

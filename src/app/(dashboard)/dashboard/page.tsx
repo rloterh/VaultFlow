@@ -14,7 +14,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Avatar, Skeleton } from "@/components/ui/badge";
 import { RevenueChart, StatusChart } from "@/components/charts";
 import { useAuth } from "@/hooks/use-auth";
+import { usePermissions } from "@/hooks/use-permissions";
 import { getActivityLabel, getActivitySubject } from "@/lib/activity/presentation";
+import { buildReportSnapshot } from "@/lib/reports/analytics";
 import { useOrgStore } from "@/stores/org-store";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -35,6 +37,7 @@ function timeAgo(d: string) {
 
 export default function DashboardPage() {
   const { profile } = useAuth();
+  const permissions = usePermissions();
   const { currentOrg } = useOrgStore();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -42,16 +45,20 @@ export default function DashboardPage() {
   const [statusData, setStatusData] = useState<StatusDistribution[]>([]);
   const [recent, setRecent] = useState<Invoice[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [operationsPulse, setOperationsPulse] = useState(() =>
+    buildReportSnapshot([], [], { range: "90d", status: "all" })
+  );
 
   const fetchData = useCallback(async () => {
     if (!currentOrg) return;
     const sb = getSupabaseBrowserClient();
     const [invRes, cliRes, actRes] = await Promise.all([
       sb.from("invoices").select("*, client:clients(id, name, company)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }),
-      sb.from("clients").select("*", { count: "exact", head: true }).eq("org_id", currentOrg.id).eq("is_active", true),
+      sb.from("clients").select("*").eq("org_id", currentOrg.id).eq("is_active", true),
       sb.from("activity_log").select("*, profile:profiles(full_name, avatar_url)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }).limit(8),
     ]);
     const invoices = (invRes.data ?? []) as Invoice[];
+    const clients = (cliRes.data ?? []) as Client[];
     setRecent(invoices.slice(0, 5));
     setActivity((actRes.data ?? []) as ActivityEntry[]);
 
@@ -62,9 +69,10 @@ export default function DashboardPage() {
     setStats({
       totalRevenue: totalRev, revenueChange: 20.1,
       invoicesSent: invoices.filter(i => i.status !== "draft").length, invoicesChange: 12,
-      activeClients: cliRes.count ?? 0, clientsChange: 3,
+      activeClients: clients.length, clientsChange: 3,
       overdueAmount: overdueAmt, overdueChange: -4.3,
     });
+    setOperationsPulse(buildReportSnapshot(invoices, clients, { range: "90d", status: "all" }));
 
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const now = new Date();
@@ -92,6 +100,18 @@ export default function DashboardPage() {
   useInvoiceRealtime(currentOrg?.id, fetchData);
 
   const name = profile?.full_name?.split(" ")[0] || "there";
+  const primaryAction = permissions.can("invoices:create")
+    ? {
+        href: "/dashboard/invoices",
+        label: "New invoice",
+        icon: <Plus className="h-4 w-4" />,
+      }
+    : {
+        href: "/dashboard/reports",
+        label: "Open reports",
+        icon: <ArrowUpRight className="h-4 w-4" />,
+      };
+  const biggestExposure = operationsPulse.topClients[0];
 
   if (loading) return (
     <div className="space-y-6">
@@ -108,7 +128,7 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-white">Good morning, {name}</h1>
           <p className="mt-1 text-sm text-neutral-500">Here&apos;s what&apos;s happening with your finances today.</p>
         </div>
-        <Link href="/dashboard/invoices"><Button leftIcon={<Plus className="h-4 w-4" />}>New invoice</Button></Link>
+        <Link href={primaryAction.href}><Button leftIcon={primaryAction.icon}>{primaryAction.label}</Button></Link>
       </motion.div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -117,6 +137,51 @@ export default function DashboardPage() {
         <MetricCard label="Active Clients" value={String(stats?.activeClients ?? 0)} change={`+${stats?.clientsChange}`} trend="up" icon={Users} iconColor="bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400" index={2} />
         <MetricCard label="Overdue" value={fmt(stats?.overdueAmount ?? 0)} change={`${stats?.overdueChange}%`} trend="down" icon={TrendingUp} iconColor="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400" index={3} />
       </div>
+
+      <motion.div variants={item} className="grid gap-4 lg:grid-cols-3">
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">Collection pulse</p>
+          <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+            {fmt(operationsPulse.summary.outstandingBalance)}
+          </p>
+          <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+            {operationsPulse.summary.overdueCount > 0
+              ? `${operationsPulse.summary.overdueCount} overdue invoices need follow-up in the last 90 days.`
+              : "Receivables are moving cleanly with no overdue invoices in the current pulse."}
+          </p>
+          <Link href="/dashboard/reports" className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+            Review operations
+          </Link>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">Top billed account</p>
+          <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+            {biggestExposure?.name ?? "No account at risk"}
+          </p>
+          <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+            {biggestExposure
+              ? `${fmt(biggestExposure.total_revenue)} billed across ${biggestExposure.invoice_count} invoices in the current reporting pulse.`
+              : "Once invoices are active, the dashboard will highlight the account with the heaviest billed activity."}
+          </p>
+          <Link href="/dashboard/clients" className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+            Open client ops
+          </Link>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">Workspace mode</p>
+          <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+            {permissions.can("invoices:create") ? "Operator access" : "Read-only reporting"}
+          </p>
+          <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+            {permissions.can("invoices:create")
+              ? "You can create invoices, manage workflows, and drill into account activity from the dashboard."
+              : "Your current role is optimized for monitoring workspace performance without changing invoice state."}
+          </p>
+          <Link href={permissions.can("invoices:create") ? "/dashboard/invoices" : "/dashboard/reports"} className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+            {permissions.can("invoices:create") ? "Manage invoices" : "Open reports"}
+          </Link>
+        </Card>
+      </motion.div>
 
       <div className="grid gap-6 lg:grid-cols-7">
         <motion.div variants={item} className="lg:col-span-4">
