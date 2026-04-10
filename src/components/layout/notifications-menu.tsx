@@ -3,8 +3,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, Clock3 } from "lucide-react";
 import { ActionMenu, type ActionMenuSection } from "@/components/ui/action-menu";
-import { getActivityHeadline } from "@/lib/activity/presentation";
+import {
+  getActivityHeadline,
+  getActivityIcon,
+  getActivityTone,
+} from "@/lib/activity/presentation";
+import {
+  getActivityDestination,
+  isAttentionActivity,
+} from "@/lib/activity/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useOrgStore } from "@/stores/org-store";
 import type { ActivityEntry } from "@/types/database";
 
@@ -18,6 +27,7 @@ function timeAgo(value: string) {
 
 export function NotificationsMenu() {
   const { currentOrg } = useOrgStore();
+  const { role } = usePermissions();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
 
   const fetchNotifications = useCallback(async () => {
@@ -32,7 +42,7 @@ export function NotificationsMenu() {
       .select("*, profile:profiles(full_name, avatar_url)")
       .eq("org_id", currentOrg.id)
       .order("created_at", { ascending: false })
-      .limit(5);
+      .limit(8);
 
     if (error) {
       setEntries([]);
@@ -46,31 +56,52 @@ export function NotificationsMenu() {
     void fetchNotifications();
   }, [fetchNotifications]);
 
-  const sections: ActionMenuSection[] =
-    entries.length > 0
-      ? [
-          {
-            label: "Recent activity",
-            items: entries.map((entry) => ({
-              label: getActivityHeadline(entry),
-              description: `${entry.profile?.full_name ?? "System"} - ${timeAgo(entry.created_at)}`,
-              href: "/dashboard/activity",
-              icon: Clock3,
-            })),
-          },
-        ]
-      : [
-          {
-            items: [
-              {
-                label: "No alerts right now",
-                description: "Recent operational events will appear here.",
-                icon: Clock3,
-                disabled: true,
-              },
-            ],
-          },
-        ];
+  const attentionEntries = entries.filter(isAttentionActivity).slice(0, 3);
+  const recentEntries = entries.filter((entry) => !isAttentionActivity(entry)).slice(0, 5);
+
+  const sections: ActionMenuSection[] = [];
+
+  if (attentionEntries.length > 0) {
+    sections.push({
+      label: "Needs attention",
+      items: attentionEntries.map((entry) => {
+        const tone = getActivityTone(entry.action);
+
+        return {
+          label: getActivityHeadline(entry),
+          description: `${entry.profile?.full_name ?? "System"} - ${timeAgo(entry.created_at)}`,
+          href: getActivityDestination(entry, role),
+          icon: getActivityIcon(entry.action),
+          tone: tone === "danger" || tone === "warning" ? "danger" : "default",
+        };
+      }),
+    });
+  }
+
+  if (recentEntries.length > 0) {
+    sections.push({
+      label: "Recent updates",
+      items: recentEntries.map((entry) => ({
+        label: getActivityHeadline(entry),
+        description: `${entry.profile?.full_name ?? "System"} - ${timeAgo(entry.created_at)}`,
+        href: getActivityDestination(entry, role),
+        icon: getActivityIcon(entry.action),
+      })),
+    });
+  }
+
+  if (sections.length === 0) {
+    sections.push({
+      items: [
+        {
+          label: "No alerts right now",
+          description: "Recent operational events will appear here.",
+          icon: Clock3,
+          disabled: true,
+        },
+      ],
+    });
+  }
 
   return (
     <ActionMenu
