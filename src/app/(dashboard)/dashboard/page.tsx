@@ -23,9 +23,12 @@ import {
   formatLatestReminderStatus,
   formatQueuePriority,
   summarizeCollectionsQueue,
-  type CollectionsQueuePreset,
   type ReminderActivityLike,
 } from "@/lib/collections/queue";
+import {
+  buildClientInsightMap,
+  rankClientAccounts,
+} from "@/lib/clients/insights";
 import {
   canRecordReminder,
   recordInvoiceReminder,
@@ -55,6 +58,8 @@ export default function DashboardPage() {
   const permissions = usePermissions();
   const { currentOrg } = useOrgStore();
   const addToast = useUIStore((s) => s.addToast);
+  const queuePreset = useUIStore((s) => s.collectionsPreset);
+  const setQueuePreset = useUIStore((s) => s.setCollectionsPreset);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>([]);
@@ -62,8 +67,8 @@ export default function DashboardPage() {
   const [recent, setRecent] = useState<Invoice[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<ReminderActivityLike[]>([]);
-  const [queuePreset, setQueuePreset] = useState<CollectionsQueuePreset>("needs-touch");
   const [reminderInvoiceId, setReminderInvoiceId] = useState<string | null>(null);
   const [operationsPulse, setOperationsPulse] = useState(() =>
     buildReportSnapshot([], [], { range: "90d", status: "all" })
@@ -88,6 +93,7 @@ export default function DashboardPage() {
     const invoices = (invRes.data ?? []) as Invoice[];
     const clients = (cliRes.data ?? []) as Client[];
     setInvoices(invoices);
+    setClients(clients);
     setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
     setRecent(invoices.slice(0, 5));
     setActivity((actRes.data ?? []) as ActivityEntry[]);
@@ -154,6 +160,10 @@ export default function DashboardPage() {
     () => filterCollectionsQueue(collectionsQueue, queuePreset).slice(0, 4),
     [collectionsQueue, queuePreset]
   );
+  const clientRiskRanking = useMemo(() => {
+    const insightMap = buildClientInsightMap(invoices);
+    return rankClientAccounts(clients, insightMap).slice(0, 4);
+  }, [clients, invoices]);
 
   async function handleRecordReminder(invoice: Invoice) {
     setReminderInvoiceId(invoice.id);
@@ -282,7 +292,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
             <div className="space-y-3">
               {visibleQueue.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
@@ -392,6 +402,40 @@ export default function DashboardPage() {
                       {queueSummary.unreminded}
                     </span>
                   </div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                  At-risk accounts
+                </p>
+                <div className="mt-3 space-y-3">
+                  {clientRiskRanking.length === 0 ? (
+                    <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                      Client risk ranking will appear once invoice activity is underway.
+                    </p>
+                  ) : (
+                    clientRiskRanking.map((client) => (
+                      <Link
+                        key={client.id}
+                        href={`/dashboard/clients/${client.id}`}
+                        className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                            {client.name}
+                          </p>
+                          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                            {client.overdueTotal > 0
+                              ? `${fmt(client.overdueTotal)} overdue`
+                              : `${fmt(client.openExposure)} open exposure`}
+                          </p>
+                        </div>
+                        <Badge variant={client.healthVariant}>
+                          {client.healthLabel}
+                        </Badge>
+                      </Link>
+                    ))
+                  )}
                 </div>
               </div>
               <div className="rounded-xl border border-neutral-200/70 p-4 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">

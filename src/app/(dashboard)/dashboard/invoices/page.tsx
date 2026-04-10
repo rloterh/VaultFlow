@@ -65,13 +65,14 @@ export default function InvoicesPage() {
   const { user } = useAuth();
   const { can } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
+  const collectionsPreset = useUIStore((s) => s.collectionsPreset);
+  const setCollectionsPreset = useUIStore((s) => s.setCollectionsPreset);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<ReminderActivityLike[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<InvoiceStatus | "all">("all");
-  const [workflow, setWorkflow] = useState<"all" | "collections" | "needs-touch">("all");
   const [search, setSearch] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
   const [draftForm, setDraftForm] = useState({
@@ -266,18 +267,29 @@ export default function InvoicesPage() {
   );
 
   const filteredInvoices = useMemo(() => {
-    if (workflow === "all") {
+    if (collectionsPreset === "all") {
       return invoices;
     }
 
     const queueInvoiceIds = new Set(
       collectionsQueue
-        .filter((item) => workflow === "collections" || item.priority !== "monitor")
+        .filter((item) => {
+          if (collectionsPreset === "needs-touch") {
+            return item.priority !== "monitor";
+          }
+          if (collectionsPreset === "overdue") {
+            return item.invoice.status === "overdue";
+          }
+          if (collectionsPreset === "unreminded") {
+            return item.reminderCount === 0;
+          }
+          return true;
+        })
         .map((item) => item.invoice.id)
     );
 
     return invoices.filter((invoice) => queueInvoiceIds.has(invoice.id));
-  }, [collectionsQueue, invoices, workflow]);
+  }, [collectionsPreset, collectionsQueue, invoices]);
 
   const queueByInvoiceId = useMemo(
     () => new Map(collectionsQueue.map((item) => [item.invoice.id, item])),
@@ -693,16 +705,17 @@ export default function InvoicesPage() {
             </div>
             <div className="flex items-center gap-1">
               {[
-                { label: "All workflow", value: "all" as const },
-                { label: "Collections", value: "collections" as const },
+                { label: "All open", value: "all" as const },
                 { label: "Needs touch", value: "needs-touch" as const },
+                { label: "Overdue", value: "overdue" as const },
+                { label: "Unreminded", value: "unreminded" as const },
               ].map((entry) => (
                 <button
                   key={entry.value}
                   type="button"
-                  onClick={() => setWorkflow(entry.value)}
+                  onClick={() => setCollectionsPreset(entry.value)}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                    workflow === entry.value
+                    collectionsPreset === entry.value
                       ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
                       : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
                   }`}

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { CollectionsQueuePreset } from "@/lib/collections/queue";
 
 export interface Toast {
   id: string;
@@ -20,6 +21,10 @@ interface UIState {
   // Theme
   theme: "light" | "dark" | "system";
   setTheme: (theme: "light" | "dark" | "system") => void;
+
+  // Operations workspace
+  collectionsPreset: CollectionsQueuePreset;
+  setCollectionsPreset: (preset: CollectionsQueuePreset) => void;
 
   // Toasts
   toasts: Toast[];
@@ -48,6 +53,10 @@ export const useUIStore = create<UIState>()(
       theme: "system",
       setTheme: (theme) => set({ theme }),
 
+      // Operations workspace
+      collectionsPreset: "needs-touch",
+      setCollectionsPreset: (preset) => set({ collectionsPreset: preset }),
+
       // Toasts
       toasts: [],
       addToast: (toast) => {
@@ -73,6 +82,7 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         theme: state.theme,
         sidebarCollapsed: state.sidebarCollapsed,
+        collectionsPreset: state.collectionsPreset,
       }),
     }
   )

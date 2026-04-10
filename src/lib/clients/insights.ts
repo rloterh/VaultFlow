@@ -1,4 +1,4 @@
-import type { Invoice } from "@/types/database";
+import type { Client, Invoice } from "@/types/database";
 
 export type ClientHealthState = "new" | "healthy" | "attention" | "at-risk";
 export type ClientHealthVariant = "info" | "success" | "warning" | "danger";
@@ -16,6 +16,18 @@ export interface ClientFinancialSnapshot {
   healthLabel: string;
   healthVariant: ClientHealthVariant;
   collectionSummary: string;
+}
+
+export interface RankedClientAccount {
+  id: string;
+  name: string;
+  company: string | null;
+  health: ClientHealthState;
+  healthLabel: string;
+  healthVariant: ClientHealthVariant;
+  openExposure: number;
+  overdueTotal: number;
+  nextDueDate: string | null;
 }
 
 export function buildClientFinancialSnapshot(
@@ -103,4 +115,39 @@ export function buildClientInsightMap(invoices: Invoice[]) {
   }
 
   return insightMap;
+}
+
+export function rankClientAccounts(
+  clients: Pick<Client, "id" | "name" | "company">[],
+  insightMap: Map<string, ClientFinancialSnapshot>
+) {
+  return clients
+    .map((client) => {
+      const snapshot = insightMap.get(client.id) ?? buildClientFinancialSnapshot([]);
+      return {
+        id: client.id,
+        name: client.name,
+        company: client.company,
+        health: snapshot.health,
+        healthLabel: snapshot.healthLabel,
+        healthVariant: snapshot.healthVariant,
+        openExposure: snapshot.pendingTotal + snapshot.overdueTotal,
+        overdueTotal: snapshot.overdueTotal,
+        nextDueDate: snapshot.nextDueDate,
+      } satisfies RankedClientAccount;
+    })
+    .sort((left, right) => {
+      const healthWeight = {
+        "at-risk": 0,
+        attention: 1,
+        healthy: 2,
+        new: 3,
+      } satisfies Record<ClientHealthState, number>;
+
+      return (
+        healthWeight[left.health] - healthWeight[right.health] ||
+        right.overdueTotal - left.overdueTotal ||
+        right.openExposure - left.openExposure
+      );
+    });
 }

@@ -44,7 +44,6 @@ import {
   formatLatestReminderStatus,
   formatQueuePriority,
   summarizeCollectionsQueue,
-  type CollectionsQueuePreset,
 } from "@/lib/collections/queue";
 import {
   canRecordReminder,
@@ -186,13 +185,14 @@ function ReportsContent() {
   const { currentOrg } = useOrgStore();
   const { can, role } = usePermissions();
   const addToast = useUIStore((state) => state.addToast);
+  const queuePreset = useUIStore((state) => state.collectionsPreset);
+  const setQueuePreset = useUIStore((state) => state.setCollectionsPreset);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<ReminderActivityEntry[]>([]);
   const [reminderInvoiceId, setReminderInvoiceId] = useState<string | null>(null);
-  const [queuePreset, setQueuePreset] = useState<CollectionsQueuePreset>("needs-touch");
   const [filters, setFilters] = useState<ReportFilters>({
     range: "90d",
     status: "all",
