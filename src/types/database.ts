@@ -1,5 +1,3 @@
-import type { Role } from "@/config/roles";
-
 // Re-export Phase 1 types
 export type { Profile, Organization, OrgMembership, OrgInvite, AuthUser, ApiResponse, PaginatedResponse } from "./auth";
 export type { OrgPlan, InviteStatus } from "./auth";

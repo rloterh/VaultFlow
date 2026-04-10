@@ -169,7 +169,7 @@ export async function getInvoices(
   const from = (page - 1) * pageSize;
   query = query.range(from, from + pageSize - 1);
 
-  const { data, count, error } = await query;
+  const { data, count } = await query;
 
   return {
     invoices: (data ?? []) as Invoice[],

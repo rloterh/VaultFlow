@@ -1,18 +1,23 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Plus, FileText } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { FileText, Plus, Sparkles } from "lucide-react";
+import { InvoiceRowActions } from "@/components/dashboard/invoice-row-actions";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
+import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { useOrgStore } from "@/stores/org-store";
+import { Input } from "@/components/ui/input";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { useAuth } from "@/hooks/use-auth";
 import { useInvoiceRealtime } from "@/lib/supabase/realtime";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import type { Invoice, InvoiceStatus } from "@/types/database";
+import { useOrgStore } from "@/stores/org-store";
+import { useUIStore } from "@/stores/ui-store";
+import type { Client, Invoice, InvoiceStatus } from "@/types/database";
 
 const statuses: { label: string; value: InvoiceStatus | "all" }[] = [
   { label: "All", value: "all" },
@@ -23,23 +28,53 @@ const statuses: { label: string; value: InvoiceStatus | "all" }[] = [
 ];
 
 function fmt(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(n);
 }
 
-function fmtDate(d: string) {
-  return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+function fmtDate(value: string) {
+  return new Date(value).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function buildInvoiceNumber() {
+  const dateChunk = new Date().toISOString().slice(2, 10).replace(/-/g, "");
+  const randomChunk = Math.floor(100 + Math.random() * 900);
+  return `INV-${dateChunk}-${randomChunk}`;
 }
 
 export default function InvoicesPage() {
   const router = useRouter();
   const { currentOrg } = useOrgStore();
+  const { user } = useAuth();
+  const addToast = useUIStore((s) => s.addToast);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<InvoiceStatus | "all">("all");
   const [search, setSearch] = useState("");
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [draftForm, setDraftForm] = useState({
+    client_id: "",
+    invoice_number: buildInvoiceNumber(),
+    issue_date: new Date().toISOString().slice(0, 10),
+    due_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10),
+    subtotal: "0",
+    tax_rate: "0",
+    notes: "",
+  });
 
   const fetchInvoices = useCallback(async () => {
-    if (!currentOrg) return;
+    if (!currentOrg) {
+      return;
+    }
+
     const sb = getSupabaseBrowserClient();
     let query = sb
       .from("invoices")
@@ -47,25 +82,130 @@ export default function InvoicesPage() {
       .eq("org_id", currentOrg.id)
       .order("created_at", { ascending: false });
 
-    if (status !== "all") query = query.eq("status", status);
-    if (search) query = query.ilike("invoice_number", `%${search}%`);
+    if (status !== "all") {
+      query = query.eq("status", status);
+    }
 
-    const { data } = await query;
-    setInvoices((data ?? []) as Invoice[]);
+    if (search) {
+      query = query.ilike("invoice_number", `%${search}%`);
+    }
+
+    const [invoiceRes, clientRes] = await Promise.all([
+      query,
+      sb
+        .from("clients")
+        .select("*")
+        .eq("org_id", currentOrg.id)
+        .eq("is_active", true)
+        .order("name"),
+    ]);
+
+    const nextInvoices = (invoiceRes.data ?? []) as Invoice[];
+    const nextClients = (clientRes.data ?? []) as Client[];
+    setInvoices(nextInvoices);
+    setClients(nextClients);
+    setDraftForm((current) => ({
+      ...current,
+      client_id: current.client_id || nextClients[0]?.id || "",
+    }));
     setLoading(false);
-  }, [currentOrg, status, search]);
+  }, [currentOrg, search, status]);
 
-  useEffect(() => { fetchInvoices(); }, [fetchInvoices]);
+  useEffect(() => {
+    void fetchInvoices();
+  }, [fetchInvoices]);
+
   useInvoiceRealtime(currentOrg?.id, fetchInvoices);
+
+  async function createDraftInvoice(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!currentOrg || !user) {
+      return;
+    }
+
+    const subtotal = Number(draftForm.subtotal);
+    const taxRate = Number(draftForm.tax_rate);
+    const taxAmount = subtotal * (taxRate / 100);
+    const total = subtotal + taxAmount;
+
+    setSaving(true);
+    const sb = getSupabaseBrowserClient();
+    const { data, error } = await sb
+      .from("invoices")
+      .insert({
+        org_id: currentOrg.id,
+        client_id: draftForm.client_id,
+        invoice_number: draftForm.invoice_number,
+        status: "draft",
+        subtotal,
+        tax_rate: taxRate,
+        tax_amount: taxAmount,
+        total,
+        issue_date: draftForm.issue_date,
+        due_date: draftForm.due_date,
+        notes: draftForm.notes || null,
+        created_by: user.id,
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      addToast({
+        type: "error",
+        title: "Draft creation failed",
+        description: error.message,
+      });
+      setSaving(false);
+      return;
+    }
+
+    addToast({
+      type: "success",
+      title: "Draft invoice created",
+      description: `${draftForm.invoice_number} is ready for review.`,
+    });
+    setSaving(false);
+    setComposerOpen(false);
+    setDraftForm({
+      client_id: clients[0]?.id || "",
+      invoice_number: buildInvoiceNumber(),
+      issue_date: new Date().toISOString().slice(0, 10),
+      due_date: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10),
+      subtotal: "0",
+      tax_rate: "0",
+      notes: "",
+    });
+    await fetchInvoices();
+
+    if (data?.id) {
+      router.push(`/dashboard/invoices/${data.id}`);
+    }
+  }
+
+  const metrics = useMemo(() => {
+    const paid = invoices.filter((invoice) => invoice.status === "paid");
+    return {
+      total: invoices.length,
+      draft: invoices.filter((invoice) => invoice.status === "draft").length,
+      outstanding: invoices
+        .filter((invoice) => ["sent", "viewed", "overdue"].includes(invoice.status))
+        .reduce((sum, invoice) => sum + Number(invoice.total), 0),
+      paid: paid.reduce((sum, invoice) => sum + Number(invoice.total), 0),
+    };
+  }, [invoices]);
 
   const columns: Column<Invoice>[] = [
     {
       key: "invoice_number",
       header: "Invoice",
       sortable: true,
-      width: "160px",
+      width: "180px",
       render: (row) => (
-        <Link href={`/dashboard/invoices/${row.id}`} className="font-medium text-neutral-900 hover:underline dark:text-white">
+        <Link
+          href={`/dashboard/invoices/${row.id}`}
+          className="font-medium text-neutral-900 hover:underline dark:text-white"
+        >
           {row.invoice_number}
         </Link>
       ),
@@ -73,11 +213,14 @@ export default function InvoicesPage() {
     {
       key: "client",
       header: "Client",
-      sortable: false,
       render: (row) => (
         <div>
-          <p className="text-neutral-900 dark:text-white">{(row.client as any)?.name ?? "—"}</p>
-          <p className="text-xs text-neutral-500">{(row.client as any)?.company ?? ""}</p>
+          <p className="text-neutral-900 dark:text-white">
+            {(row.client as Client | undefined)?.name ?? "—"}
+          </p>
+          <p className="text-xs text-neutral-500">
+            {(row.client as Client | undefined)?.company ?? ""}
+          </p>
         </div>
       ),
     },
@@ -93,7 +236,11 @@ export default function InvoicesPage() {
       header: "Date",
       sortable: true,
       width: "130px",
-      render: (row) => <span className="text-neutral-600 dark:text-neutral-400">{fmtDate(row.issue_date)}</span>,
+      render: (row) => (
+        <span className="text-neutral-600 dark:text-neutral-400">
+          {fmtDate(row.issue_date)}
+        </span>
+      ),
     },
     {
       key: "due_date",
@@ -101,9 +248,16 @@ export default function InvoicesPage() {
       sortable: true,
       width: "130px",
       render: (row) => {
-        const overdue = new Date(row.due_date) < new Date() && row.status !== "paid";
+        const overdue =
+          new Date(row.due_date) < new Date() && row.status !== "paid";
         return (
-          <span className={overdue ? "font-medium text-red-600 dark:text-red-400" : "text-neutral-600 dark:text-neutral-400"}>
+          <span
+            className={
+              overdue
+                ? "font-medium text-red-600 dark:text-red-400"
+                : "text-neutral-600 dark:text-neutral-400"
+            }
+          >
             {fmtDate(row.due_date)}
           </span>
         );
@@ -115,20 +269,207 @@ export default function InvoicesPage() {
       sortable: true,
       width: "120px",
       render: (row) => (
-        <span className="font-medium text-neutral-900 dark:text-white">{fmt(Number(row.total))}</span>
+        <span className="font-medium text-neutral-900 dark:text-white">
+          {fmt(Number(row.total))}
+        </span>
       ),
+    },
+    {
+      key: "actions",
+      header: "",
+      width: "56px",
+      render: (row) => <InvoiceRowActions invoice={row} onUpdated={fetchInvoices} />,
     },
   ];
 
   return (
-    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="space-y-6">
-      <div className="flex items-center justify-between">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="space-y-6"
+    >
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 className="text-2xl font-semibold text-neutral-900 dark:text-white">Invoices</h1>
-          <p className="mt-1 text-sm text-neutral-500">Create, track, and manage your invoices.</p>
+          <h1 className="text-2xl font-semibold text-neutral-900 dark:text-white">
+            Invoices
+          </h1>
+          <p className="mt-1 text-sm text-neutral-500">
+            Create, reconcile, and operationalize your receivables workflow.
+          </p>
         </div>
-        <Button leftIcon={<Plus className="h-4 w-4" />}>Create invoice</Button>
+        <Button
+          leftIcon={<Plus className="h-4 w-4" />}
+          onClick={() => setComposerOpen((current) => !current)}
+        >
+          {composerOpen ? "Close composer" : "Create draft"}
+        </Button>
       </div>
+
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Portfolio
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {metrics.total}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">Tracked invoices in the current view.</p>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Draft queue
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {metrics.draft}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">Documents still waiting for send-off.</p>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Outstanding
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {fmt(metrics.outstanding)}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">Open exposure still in collections motion.</p>
+        </Card>
+        <Card>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Realized
+          </p>
+          <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+            {fmt(metrics.paid)}
+          </p>
+          <p className="mt-1 text-sm text-neutral-500">Closed revenue already converted to cash.</p>
+        </Card>
+      </div>
+
+      {composerOpen && (
+        <Card>
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-neutral-400" />
+            <CardTitle>Draft composer</CardTitle>
+          </div>
+          <CardDescription>
+            Stand up a new invoice quickly, then refine line items from the detail view.
+          </CardDescription>
+          <form onSubmit={createDraftInvoice} className="mt-6 grid gap-4 lg:grid-cols-2">
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                  Client
+                </label>
+                <select
+                  value={draftForm.client_id}
+                  onChange={(event) =>
+                    setDraftForm((current) => ({
+                      ...current,
+                      client_id: event.target.value,
+                    }))
+                  }
+                  className="h-10 w-full rounded-lg border border-neutral-200 bg-white px-3 text-sm text-neutral-900 focus:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-white"
+                  required
+                >
+                  <option value="">Select a client</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.name}
+                      {client.company ? ` · ${client.company}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Input
+                label="Invoice number"
+                value={draftForm.invoice_number}
+                onChange={(event) =>
+                  setDraftForm((current) => ({
+                    ...current,
+                    invoice_number: event.target.value,
+                  }))
+                }
+                required
+              />
+              <Input
+                label="Subtotal"
+                type="number"
+                min="0"
+                step="0.01"
+                value={draftForm.subtotal}
+                onChange={(event) =>
+                  setDraftForm((current) => ({
+                    ...current,
+                    subtotal: event.target.value,
+                  }))
+                }
+                required
+              />
+            </div>
+            <div className="space-y-4">
+              <Input
+                label="Issue date"
+                type="date"
+                value={draftForm.issue_date}
+                onChange={(event) =>
+                  setDraftForm((current) => ({
+                    ...current,
+                    issue_date: event.target.value,
+                  }))
+                }
+                required
+              />
+              <Input
+                label="Due date"
+                type="date"
+                value={draftForm.due_date}
+                onChange={(event) =>
+                  setDraftForm((current) => ({
+                    ...current,
+                    due_date: event.target.value,
+                  }))
+                }
+                required
+              />
+              <Input
+                label="Tax rate"
+                type="number"
+                min="0"
+                step="0.01"
+                value={draftForm.tax_rate}
+                onChange={(event) =>
+                  setDraftForm((current) => ({
+                    ...current,
+                    tax_rate: event.target.value,
+                  }))
+                }
+              />
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                  Notes
+                </label>
+                <textarea
+                  value={draftForm.notes}
+                  onChange={(event) =>
+                    setDraftForm((current) => ({
+                      ...current,
+                      notes: event.target.value,
+                    }))
+                  }
+                  rows={4}
+                  className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 focus:border-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-100 dark:border-neutral-700 dark:bg-neutral-800 dark:text-white"
+                  placeholder="Optional client-facing note or internal context."
+                />
+              </div>
+            </div>
+            <div className="lg:col-span-2 flex justify-end">
+              <Button type="submit" isLoading={saving}>
+                Save draft invoice
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
 
       <DataTable
         data={invoices}
@@ -143,23 +484,27 @@ export default function InvoicesPage() {
             icon={FileText}
             title="No invoices yet"
             description="Create your first invoice to start tracking revenue."
-            actionLabel="Create invoice"
-            onAction={() => router.push("/dashboard/invoices")}
+            actionLabel="Create draft"
+            onAction={() => setComposerOpen(true)}
           />
         }
         toolbar={
           <div className="flex items-center gap-1">
-            {statuses.map((s) => (
+            {statuses.map((entry) => (
               <button
-                key={s.value}
-                onClick={() => { setStatus(s.value); setLoading(true); }}
+                key={entry.value}
+                type="button"
+                onClick={() => {
+                  setStatus(entry.value);
+                  setLoading(true);
+                }}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  status === s.value
+                  status === entry.value
                     ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
                     : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
                 }`}
               >
-                {s.label}
+                {entry.label}
               </button>
             ))}
           </div>

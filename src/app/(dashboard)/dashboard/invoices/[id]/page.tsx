@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
@@ -28,7 +28,6 @@ function fmtDate(d: string) {
 
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
   const addToast = useUIStore((s) => s.addToast);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
