@@ -146,7 +146,31 @@ export async function transitionInvoiceStatus(
   };
 
   if (nextStatus === "sent") {
+    const response = await fetch("/api/stripe/invoice-send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ invoiceId: invoice.id }),
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      throw new Error(
+        payload?.error ??
+          "Stripe could not create or send the linked invoice right now."
+      );
+    }
+
+    const payload = (await response.json()) as {
+      stripeInvoiceId?: string | null;
+      stripePaymentIntentId?: string | null;
+    };
+
     updates.sent_at = invoice.sent_at ?? now;
+    updates.stripe_invoice_id = payload.stripeInvoiceId ?? invoice.stripe_invoice_id ?? null;
+    updates.stripe_payment_intent_id =
+      payload.stripePaymentIntentId ?? invoice.stripe_payment_intent_id ?? null;
   }
 
   if (nextStatus === "paid") {
@@ -185,21 +209,6 @@ export async function transitionInvoiceStatus(
       total: invoice.total,
     },
   });
-
-  if (
-    nextStatus === "sent" &&
-    (invoice.stripe_invoice_id || invoice.stripe_payment_intent_id)
-  ) {
-    try {
-      await fetch("/api/stripe/invoice-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invoiceId: invoice.id }),
-      });
-    } catch {
-      // Sending the invoice should still succeed even if Stripe metadata sync is unavailable.
-    }
-  }
 
   return {
     ...invoice,

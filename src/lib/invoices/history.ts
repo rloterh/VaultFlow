@@ -60,6 +60,7 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
       status?: string;
       refund_status?: string;
       stripe_refund_id?: string;
+      stripe_credit_note_id?: string;
       stripe_invoice_number?: string;
     };
     const actorName = entry.actor?.full_name || entry.actor?.email || "System";
@@ -141,6 +142,30 @@ export function buildInvoiceHistoryEvents(entries: InvoiceHistoryEntryRecord[]):
           detail: metadata.amount
             ? `${fmt(Number(metadata.amount))} was submitted to Stripe for refund${typeof metadata.stripe_refund_id === "string" ? ` (${metadata.stripe_refund_id})` : ""}.${typeof metadata.resulting_balance === "number" ? ` Projected open balance: ${fmt(Number(metadata.resulting_balance))}.` : ""}${typeof metadata.adjustment_note === "string" && metadata.adjustment_note.trim().length > 0 ? ` Note: ${metadata.adjustment_note}` : ""}`
             : "A Stripe refund was initiated for this invoice.",
+          createdAt: entry.created_at,
+          actorName,
+        };
+      case "invoice.credit_requested":
+        return {
+          id: entry.id,
+          title: "Stripe credit initiated",
+          tone: "info",
+          detail: metadata.amount
+            ? `${fmt(Number(metadata.amount))} was submitted to Stripe as a credit note${typeof metadata.stripe_credit_note_id === "string" ? ` (${metadata.stripe_credit_note_id})` : ""}.${typeof metadata.resulting_balance === "number" ? ` Projected open balance: ${fmt(Number(metadata.resulting_balance))}.` : ""}${typeof metadata.adjustment_note === "string" && metadata.adjustment_note.trim().length > 0 ? ` Note: ${metadata.adjustment_note}` : ""}`
+            : "A Stripe credit note was initiated for this invoice.",
+          createdAt: entry.created_at,
+          actorName,
+        };
+      case "invoice.void_requested":
+        return {
+          id: entry.id,
+          title: "Stripe void initiated",
+          tone: "info",
+          detail:
+            typeof metadata.adjustment_note === "string" &&
+            metadata.adjustment_note.trim().length > 0
+              ? `Stripe has been asked to void this invoice. Note: ${metadata.adjustment_note}`
+              : "Stripe has been asked to void this invoice.",
           createdAt: entry.created_at,
           actorName,
         };

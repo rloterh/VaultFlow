@@ -16,6 +16,7 @@ export interface Client {
   org_id: string;
   name: string;
   email: string;
+  stripe_customer_id?: string | null;
   phone: string | null;
   company: string | null;
   address_line1: string | null;
@@ -109,6 +110,8 @@ export interface InvoicePaymentEvent {
   stripe_event_id?: string | null;
   stripe_invoice_id: string | null;
   stripe_payment_intent_id: string | null;
+  stripe_refund_id?: string | null;
+  stripe_credit_note_id?: string | null;
   source: string;
   event_type: string;
   status:

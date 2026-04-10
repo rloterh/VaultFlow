@@ -154,8 +154,32 @@ async function hasProcessedStripeEvent(stripeEventId: string) {
   return !!data?.id;
 }
 
+async function hasProcessedRefundObject(stripeRefundId: string) {
+  const supabaseAdmin = getSupabaseAdmin();
+  const { data } = await supabaseAdmin
+    .from("invoice_payment_events")
+    .select("id")
+    .eq("stripe_refund_id", stripeRefundId)
+    .maybeSingle();
+
+  return !!data?.id;
+}
+
+async function hasProcessedCreditNoteObject(stripeCreditNoteId: string) {
+  const supabaseAdmin = getSupabaseAdmin();
+  const { data } = await supabaseAdmin
+    .from("invoice_payment_events")
+    .select("id")
+    .eq("stripe_credit_note_id", stripeCreditNoteId)
+    .maybeSingle();
+
+  return !!data?.id;
+}
+
 async function insertPaymentEvent({
   stripeEventId,
+  stripeRefundId,
+  stripeCreditNoteId,
   orgId,
   linkedInvoice,
   stripeInvoiceId,
@@ -167,6 +191,8 @@ async function insertPaymentEvent({
   metadata,
 }: {
   stripeEventId?: string | null;
+  stripeRefundId?: string | null;
+  stripeCreditNoteId?: string | null;
   orgId: string;
   linkedInvoice: LinkedInvoiceRecord | null;
   stripeInvoiceId: string | null;
@@ -191,6 +217,8 @@ async function insertPaymentEvent({
     invoice_id: linkedInvoice?.id ?? null,
     actor_user_id: null,
     stripe_event_id: stripeEventId ?? null,
+    stripe_refund_id: stripeRefundId ?? null,
+    stripe_credit_note_id: stripeCreditNoteId ?? null,
     stripe_invoice_id: stripeInvoiceId,
     stripe_payment_intent_id: stripePaymentIntentId,
     source: "stripe",
@@ -256,9 +284,9 @@ export async function POST(request: Request) {
         break;
       }
 
-      case "charge.refunded": {
-        const charge = event.data.object as Stripe.Charge;
-        await handleChargeRefunded(event.id, charge);
+      case "refund.created": {
+        const refund = event.data.object as Stripe.Refund;
+        await handleRefundCreated(event.id, refund);
         break;
       }
 
@@ -516,10 +544,15 @@ async function handlePaymentFailed(stripeEventId: string, invoice: Stripe.Invoic
   });
 }
 
-async function handleChargeRefunded(stripeEventId: string, charge: Stripe.Charge) {
-  if (await hasProcessedStripeEvent(stripeEventId)) {
+async function handleRefundCreated(stripeEventId: string, refund: Stripe.Refund) {
+  if (await hasProcessedStripeEvent(stripeEventId) || await hasProcessedRefundObject(refund.id)) {
     return;
   }
+
+  const charge =
+    typeof refund.charge === "string"
+      ? await getStripeClient().charges.retrieve(refund.charge)
+      : refund.charge;
 
   const chargeWithInvoice = charge as Stripe.Charge & {
     invoice?: string | Stripe.Invoice | null;
@@ -529,12 +562,15 @@ async function handleChargeRefunded(stripeEventId: string, charge: Stripe.Charge
       ? chargeWithInvoice.invoice
       : chargeWithInvoice.invoice?.id;
   const paymentIntentId =
-    typeof charge.payment_intent === "string"
+    typeof charge?.payment_intent === "string"
       ? charge.payment_intent
-      : charge.payment_intent?.id;
+      : charge?.payment_intent?.id;
   const customerId =
-    typeof charge.customer === "string" ? charge.customer : charge.customer?.id;
-  const metadata = charge.metadata ?? {};
+    typeof charge?.customer === "string" ? charge.customer : charge?.customer?.id;
+  const metadata = {
+    ...(charge?.metadata ?? {}),
+    ...(refund.metadata ?? {}),
+  };
 
   const {
     supabaseAdmin,
@@ -553,16 +589,17 @@ async function handleChargeRefunded(stripeEventId: string, charge: Stripe.Charge
 
   if (!orgId) return;
 
-  const amount = (charge.amount_refunded ?? 0) / 100;
+  const amount = (refund.amount ?? 0) / 100;
   const nextRefundedAmount = Number(linkedInvoice?.refunded_amount ?? 0) + amount;
   const remainingBalance = linkedInvoice
     ? Math.max(Number(linkedInvoice.total) - Math.max(Number(linkedInvoice.amount_paid) - nextRefundedAmount, 0) - Number(linkedInvoice.credited_amount ?? 0), 0)
     : 0;
   const eventMetadata = {
     amount,
-    currency: charge.currency,
+    currency: refund.currency ?? charge?.currency ?? null,
     stripe_invoice_id: stripeInvoiceId,
     stripe_payment_intent_id: stripePaymentIntentId,
+    stripe_refund_id: refund.id,
     linked_invoice_id: linkedInvoice?.id ?? null,
     linked_invoice_number: linkedInvoice?.invoice_number ?? null,
     billing_reference: linkedInvoice
@@ -595,6 +632,7 @@ async function handleChargeRefunded(stripeEventId: string, charge: Stripe.Charge
 
   await insertPaymentEvent({
     stripeEventId,
+    stripeRefundId: refund.id,
     orgId,
     linkedInvoice,
     stripeInvoiceId,
@@ -602,7 +640,7 @@ async function handleChargeRefunded(stripeEventId: string, charge: Stripe.Charge
     eventType: "payment_refunded",
     status: "refunded",
     amount,
-    currency: charge.currency,
+    currency: refund.currency ?? charge?.currency ?? null,
     metadata: {
       ...eventMetadata,
       invoice_id: linkedInvoice?.id ?? null,
@@ -615,7 +653,10 @@ async function handleCreditNoteCreated(
   stripeEventId: string,
   creditNote: Stripe.CreditNote
 ) {
-  if (await hasProcessedStripeEvent(stripeEventId)) {
+  if (
+    (await hasProcessedStripeEvent(stripeEventId)) ||
+    (await hasProcessedCreditNoteObject(creditNote.id))
+  ) {
     return;
   }
 
@@ -656,6 +697,7 @@ async function handleCreditNoteCreated(
         )
       : null,
     credit_note_id: creditNote.id,
+    stripe_credit_note_id: creditNote.id,
     resulting_credited_amount: nextCreditedAmount,
     resulting_balance: remainingBalance,
   };
@@ -679,6 +721,7 @@ async function handleCreditNoteCreated(
 
   await insertPaymentEvent({
     stripeEventId,
+    stripeCreditNoteId: creditNote.id,
     orgId,
     linkedInvoice,
     stripeInvoiceId,

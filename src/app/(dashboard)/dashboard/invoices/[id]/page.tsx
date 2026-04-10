@@ -84,7 +84,9 @@ const LEDGER_EVENT_ACTIONS = new Set([
   "payment_received",
   "payment_failed",
   "payment_refund_requested",
+  "invoice.credit_requested",
   "payment_refunded",
+  "invoice.void_requested",
   "invoice.credited",
   "invoice.voided",
   "invoice.recovery_reviewed",
@@ -640,6 +642,8 @@ export default function InvoiceDetailPage() {
       0
     );
     const maxCreditable = Math.max(paymentSummary.outstandingAmount, 0);
+    const linkedStripeInvoiceId =
+      stripeInvoiceIdInput.trim() || invoice.stripe_invoice_id || null;
     const linkedStripePaymentIntentId =
       stripePaymentIntentIdInput.trim() || invoice.stripe_payment_intent_id || null;
 
@@ -759,6 +763,173 @@ export default function InvoiceDetailPage() {
       return;
     }
 
+    if (kind === "credit" && linkedStripeInvoiceId) {
+      setLedgerActionLoading(kind);
+      const creditResponse = await fetch("/api/stripe/credit-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: invoice.id,
+          amount: adjustment,
+          note,
+        }),
+      });
+
+      const creditPayload = (await creditResponse.json().catch(() => null)) as {
+        error?: string;
+        creditNoteId?: string;
+      } | null;
+
+      if (!creditResponse.ok) {
+        addToast({
+          type: "error",
+          title: "Stripe credit failed",
+          description:
+            creditPayload?.error ??
+            "Stripe could not issue the credit note for this invoice.",
+        });
+        setLedgerActionLoading(null);
+        return;
+      }
+
+      const metadata = {
+        ...buildInvoiceIdentifiers(invoice),
+        amount: adjustment,
+        adjustment_note: note || null,
+        stripe_credit_note_id: creditPayload?.creditNoteId ?? null,
+        stripe_invoice_id: linkedStripeInvoiceId,
+        stripe_payment_intent_id: linkedStripePaymentIntentId,
+        resulting_balance: Math.max(paymentSummary.outstandingAmount - adjustment, 0),
+        source: "stripe_credit_note",
+      };
+
+      await sb
+        .from("invoices")
+        .update({
+          last_recovery_reviewed_at: nowIso,
+        })
+        .eq("id", invoice.id);
+
+      await sb.from("invoice_payment_events").insert({
+        org_id: invoice.org_id,
+        invoice_id: invoice.id,
+        actor_user_id: user?.id ?? null,
+        stripe_invoice_id: linkedStripeInvoiceId,
+        stripe_payment_intent_id: linkedStripePaymentIntentId,
+        stripe_credit_note_id: creditPayload?.creditNoteId ?? null,
+        source: "workspace",
+        event_type: "invoice.credit_requested",
+        status: "pending",
+        amount: adjustment,
+        currency: invoice.currency,
+        metadata,
+      });
+
+      await logInvoiceActivity({
+        orgId: invoice.org_id,
+        userId: user?.id ?? null,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        action: "invoice.credit_requested",
+        metadata,
+      });
+
+      await recordBillingTimelineEvent(invoice, "invoice.credit_requested", metadata);
+
+      setAdjustmentAmount("");
+      setAdjustmentNote("");
+      setLedgerActionLoading(null);
+      await fetchInvoice();
+      addToast({
+        type: "success",
+        title: "Stripe credit initiated",
+        description:
+          "The credit note was created in Stripe and is now tracked in this invoice timeline.",
+      });
+      return;
+    }
+
+    if (kind === "void" && linkedStripeInvoiceId) {
+      setLedgerActionLoading(kind);
+      const voidResponse = await fetch("/api/stripe/void", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          invoiceId: invoice.id,
+        }),
+      });
+
+      const voidPayload = (await voidResponse.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+
+      if (!voidResponse.ok) {
+        addToast({
+          type: "error",
+          title: "Stripe void failed",
+          description:
+            voidPayload?.error ??
+            "Stripe could not void this invoice right now.",
+        });
+        setLedgerActionLoading(null);
+        return;
+      }
+
+      const metadata = {
+        ...buildInvoiceIdentifiers(invoice),
+        amount: paymentSummary.outstandingAmount,
+        adjustment_note: note || null,
+        stripe_invoice_id: linkedStripeInvoiceId,
+        stripe_payment_intent_id: linkedStripePaymentIntentId,
+        resulting_balance: 0,
+        source: "stripe_void",
+      };
+
+      await sb
+        .from("invoices")
+        .update({
+          last_recovery_reviewed_at: nowIso,
+        })
+        .eq("id", invoice.id);
+
+      await sb.from("invoice_payment_events").insert({
+        org_id: invoice.org_id,
+        invoice_id: invoice.id,
+        actor_user_id: user?.id ?? null,
+        stripe_invoice_id: linkedStripeInvoiceId,
+        stripe_payment_intent_id: linkedStripePaymentIntentId,
+        source: "workspace",
+        event_type: "invoice.void_requested",
+        status: "pending",
+        amount: paymentSummary.outstandingAmount,
+        currency: invoice.currency,
+        metadata,
+      });
+
+      await logInvoiceActivity({
+        orgId: invoice.org_id,
+        userId: user?.id ?? null,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        action: "invoice.void_requested",
+        metadata,
+      });
+
+      await recordBillingTimelineEvent(invoice, "invoice.void_requested", metadata);
+
+      setAdjustmentAmount("");
+      setAdjustmentNote("");
+      setLedgerActionLoading(null);
+      await fetchInvoice();
+      addToast({
+        type: "success",
+        title: "Stripe void initiated",
+        description:
+          "Stripe has been asked to void the invoice and the timeline is waiting for final confirmation.",
+      });
+      return;
+    }
+
     const nextInvoiceSnapshot: InvoiceDetailRecord =
       kind === "refund"
         ? {
@@ -849,9 +1020,8 @@ export default function InvoiceDetailPage() {
       org_id: invoice.org_id,
       invoice_id: invoice.id,
       actor_user_id: user?.id ?? null,
-      stripe_invoice_id: stripeInvoiceIdInput.trim() || invoice.stripe_invoice_id || null,
-      stripe_payment_intent_id:
-        stripePaymentIntentIdInput.trim() || invoice.stripe_payment_intent_id || null,
+      stripe_invoice_id: linkedStripeInvoiceId,
+      stripe_payment_intent_id: linkedStripePaymentIntentId,
       source: "workspace",
       event_type: eventAction,
       status: eventStatus,

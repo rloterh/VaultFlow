@@ -159,6 +159,16 @@ function describeBillingEvent(entry: ActivityEntry): BillingTimelineItem {
         tone: "info",
         createdAt: entry.created_at,
       };
+    case "invoice.credit_requested":
+      return {
+        id: entry.id,
+        title: "Credit note initiated",
+        description: amountLabel
+          ? `${amountLabel} was submitted to Stripe as a credit note.`
+          : "A Stripe credit note has been initiated and is awaiting confirmation.",
+        tone: "info",
+        createdAt: entry.created_at,
+      };
     case "payment_refunded":
       return {
         id: entry.id,
@@ -185,6 +195,15 @@ function describeBillingEvent(entry: ActivityEntry): BillingTimelineItem {
         title: "Invoice voided",
         description: "An invoice was voided and should no longer remain in active recovery views.",
         tone: "danger",
+        createdAt: entry.created_at,
+      };
+    case "invoice.void_requested":
+      return {
+        id: entry.id,
+        title: "Void initiated",
+        description:
+          "Stripe has been asked to void an invoice and the workspace is awaiting confirmation.",
+        tone: "info",
         createdAt: entry.created_at,
       };
     case "invoice.stripe_linked":
