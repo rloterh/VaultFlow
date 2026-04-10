@@ -37,6 +37,10 @@ import {
   buildClientOpsViewHref,
   getClientOpsViewForQueuePreset,
 } from "@/lib/operations/client-views";
+import {
+  buildWorkflowAccountabilityMap,
+  summarizeQueueAccountability,
+} from "@/lib/operations/accountability";
 import { buildReportSnapshot } from "@/lib/reports/analytics";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
@@ -73,6 +77,14 @@ export default function DashboardPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [reminders, setReminders] = useState<ReminderActivityLike[]>([]);
+  const [workflowActivity, setWorkflowActivity] = useState<
+    Array<{
+      entity_id: string;
+      action: string;
+      created_at: string;
+      profile?: { full_name: string | null; avatar_url: string | null } | null;
+    }>
+  >([]);
   const [reminderInvoiceId, setReminderInvoiceId] = useState<string | null>(null);
   const [operationsPulse, setOperationsPulse] = useState(() =>
     buildReportSnapshot([], [], { range: "90d", status: "all" })
@@ -81,7 +93,7 @@ export default function DashboardPage() {
   const fetchData = useCallback(async () => {
     if (!currentOrg) return;
     const sb = getSupabaseBrowserClient();
-    const [invRes, cliRes, actRes, reminderRes] = await Promise.all([
+    const [invRes, cliRes, actRes, reminderRes, workflowRes] = await Promise.all([
       sb.from("invoices").select("*, client:clients(id, name, company)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }),
       sb.from("clients").select("*").eq("org_id", currentOrg.id).eq("is_active", true),
       sb.from("activity_log").select("*, profile:profiles(full_name, avatar_url)").eq("org_id", currentOrg.id).order("created_at", { ascending: false }).limit(8),
@@ -93,12 +105,27 @@ export default function DashboardPage() {
         .eq("action", "invoice.reminder_sent")
         .order("created_at", { ascending: false })
         .limit(100),
+      sb
+        .from("activity_log")
+        .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
+        .eq("org_id", currentOrg.id)
+        .eq("entity_type", "invoice")
+        .order("created_at", { ascending: false })
+        .limit(300),
     ]);
     const invoices = (invRes.data ?? []) as Invoice[];
     const clients = (cliRes.data ?? []) as Client[];
     setInvoices(invoices);
     setClients(clients);
     setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
+    setWorkflowActivity(
+      (workflowRes.data ?? []) as Array<{
+        entity_id: string;
+        action: string;
+        created_at: string;
+        profile?: { full_name: string | null; avatar_url: string | null } | null;
+      }>
+    );
     setRecent(invoices.slice(0, 5));
     setActivity((actRes.data ?? []) as ActivityEntry[]);
 
@@ -159,6 +186,14 @@ export default function DashboardPage() {
   const queueSummary = useMemo(
     () => summarizeCollectionsQueue(collectionsQueue),
     [collectionsQueue]
+  );
+  const accountabilityByInvoiceId = useMemo(
+    () => buildWorkflowAccountabilityMap(workflowActivity),
+    [workflowActivity]
+  );
+  const accountabilitySummary = useMemo(
+    () => summarizeQueueAccountability(collectionsQueue, accountabilityByInvoiceId),
+    [accountabilityByInvoiceId, collectionsQueue]
   );
   const queueClientOpsHref = useMemo(
     () => buildClientOpsViewHref(getClientOpsViewForQueuePreset(queuePreset)),
@@ -302,6 +337,41 @@ export default function DashboardPage() {
 
           <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
             <div className="space-y-3">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-neutral-200/70 p-3 dark:border-neutral-800">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                    Stale owned work
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {accountabilitySummary.staleOwned}
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Owned invoices without an operator touch in more than 7 days.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-neutral-200/70 p-3 dark:border-neutral-800">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                    Unowned queue
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {accountabilitySummary.unowned}
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Queue items that do not yet show a workflow owner.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-neutral-200/70 p-3 dark:border-neutral-800">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                    Untouched overdue
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {accountabilitySummary.untouchedOverdue}
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Overdue invoices still waiting on their first reminder touchpoint.
+                  </p>
+                </div>
+              </div>
               {visibleQueue.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-neutral-200 p-6 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
                   {queuePreset === "unreminded"
@@ -335,6 +405,14 @@ export default function DashboardPage() {
                         </div>
                         <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
                           {item.clientName} &middot; {formatLatestReminderStatus(item)}
+                        </p>
+                        <p className="mt-1 text-xs text-neutral-400">
+                          {accountabilityByInvoiceId.get(item.invoice.id)?.ownerName
+                            ? `Owned by ${accountabilityByInvoiceId.get(item.invoice.id)?.ownerName}`
+                            : "No workflow owner recorded yet"}
+                          {accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt
+                            ? ` · Last touch ${timeAgo(accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt ?? "")}`
+                            : ""}
                         </p>
                       </div>
                       <div className="text-right">
@@ -454,8 +532,8 @@ export default function DashboardPage() {
               </div>
               <div className="rounded-xl border border-neutral-200/70 p-4 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
                 {permissions.can("invoices:update")
-                  ? "Managers and above can log reminders directly from the dashboard queue to keep collections work moving."
-                  : "Your role can monitor queue health here, while invoice updates stay with operators."}
+                  ? `Managers and above can log reminders directly from the dashboard queue. ${accountabilitySummary.activeRecently} queue item${accountabilitySummary.activeRecently === 1 ? "" : "s"} were touched in the last 3 days.`
+                  : "Your role can monitor queue health and ownership posture here, while invoice updates stay with operators."}
               </div>
             </div>
           </div>

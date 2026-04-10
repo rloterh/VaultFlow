@@ -12,6 +12,7 @@ import {
   getActivityTone,
 } from "@/lib/activity/presentation";
 import { isCollectionsActivityAction } from "@/lib/invoices/follow-up";
+import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import { useOrgStore } from "@/stores/org-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
@@ -47,7 +48,7 @@ export default function ActivityPage() {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<
-    "all" | "invoice" | "collections" | "client" | "member" | "billing"
+    "all" | "invoice" | "collections" | "workflow" | "client" | "member" | "billing"
   >("all");
 
   useEffect(() => {
@@ -69,8 +70,33 @@ export default function ActivityPage() {
   const filteredEntries = entries.filter((entry) => {
     if (scope === "all") return true;
     if (scope === "collections") return isCollectionsActivityAction(entry.action);
+    if (scope === "workflow") {
+      return (
+        entry.entity_type === "invoice" &&
+        [
+          "invoice.created",
+          "invoice.reminder_sent",
+          "invoice.sent",
+          "invoice.viewed",
+          "invoice.overdue",
+          "invoice.paid",
+          "invoice.cancelled",
+        ].includes(entry.action)
+      );
+    }
     return entry.entity_type === scope;
   });
+
+  const workflowAccountability = buildWorkflowAccountabilityMap(
+    filteredEntries
+      .filter((entry): entry is ActivityEntry & { entity_id: string } => Boolean(entry.entity_id))
+      .map((entry) => ({
+        entity_id: entry.entity_id,
+        action: entry.action,
+        created_at: entry.created_at,
+        profile: entry.profile ? { full_name: entry.profile.full_name } : null,
+      }))
+  );
 
   return (
     <motion.div
@@ -92,6 +118,7 @@ export default function ActivityPage() {
           { label: "All activity", value: "all" as const },
           { label: "Invoices", value: "invoice" as const },
           { label: "Collections", value: "collections" as const },
+          { label: "Workflow", value: "workflow" as const },
           { label: "Clients", value: "client" as const },
           { label: "Members", value: "member" as const },
           { label: "Billing", value: "billing" as const },
@@ -143,6 +170,7 @@ export default function ActivityPage() {
               const actorName =
                 entry.profile?.full_name || entry.profile?.email || "System";
               const detail = getActivitySubject(entry);
+              const accountability = workflowAccountability.get(entry.entity_id ?? "");
 
               return (
                 <div
@@ -171,10 +199,20 @@ export default function ActivityPage() {
                           : ""}
                       </p>
                     )}
+                    {scope === "workflow" && entry.entity_type === "invoice" && (
+                      <p className="mt-1 text-xs text-neutral-500">
+                        {accountability?.ownerName
+                          ? `Owner: ${accountability.ownerName}`
+                          : "No workflow owner recorded yet"}
+                        {accountability?.lastTouchedAt
+                          ? ` · Last touch ${formatRelativeTime(accountability.lastTouchedAt)}`
+                          : ""}
+                      </p>
+                    )}
                   </div>
                   {color && (
                     <Badge variant={color} className="mt-1 shrink-0 capitalize">
-                      {scope === "collections" ? "collections" : entry.entity_type}
+                      {scope === "collections" ? "collections" : scope === "workflow" ? "workflow" : entry.entity_type}
                     </Badge>
                   )}
                 </div>
