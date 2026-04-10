@@ -1,12 +1,14 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getSupabaseConfig, hasSupabaseConfig } from "@/lib/env";
 
 export async function getSupabaseServerClient() {
   const cookieStore = await cookies();
+  const { url, anonKey } = getSupabaseConfig();
 
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url,
+    anonKey,
     {
       cookies: {
         getAll() {
@@ -32,6 +34,8 @@ export async function getSupabaseServerClient() {
  * Returns null if no session exists.
  */
 export async function getServerUser() {
+  if (!hasSupabaseConfig()) return null;
+
   const supabase = await getSupabaseServerClient();
   const {
     data: { user },

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
@@ -13,16 +13,22 @@ import {
   Clock,
   Download,
   Eye,
+  ExternalLink,
   FileText,
+  History,
   Send,
+  ShieldCheck,
+  Wallet,
   XCircle,
 } from "lucide-react";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge, Skeleton } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useStripePortal } from "@/hooks/use-stripe";
 import {
   getActivityLabel,
   getActivitySubject,
@@ -39,7 +45,19 @@ import {
   getReminderRecommendation,
   recordInvoiceReminder,
 } from "@/lib/invoices/follow-up";
+import { logInvoiceActivity } from "@/lib/invoices/activity";
+import {
+  buildInvoiceHistoryEvents,
+  filterInvoiceHistoryEntries,
+  type InvoiceHistoryEntryRecord,
+} from "@/lib/invoices/history";
+import { getInvoicePaymentSummary } from "@/lib/invoices/payments";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
+import {
+  fetchVendorAssignedClientIds,
+  isVendorRole,
+} from "@/lib/rbac/vendor-access";
+import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { Client, Invoice, InvoiceItem } from "@/types/database";
@@ -51,7 +69,7 @@ interface InvoiceActivityEntry {
   entity_id: string;
   metadata: Record<string, unknown>;
   created_at: string;
-  profile?: { full_name: string | null; avatar_url: string | null };
+  profile?: { full_name: string | null; avatar_url: string | null; email?: string | null } | null;
 }
 
 type InvoiceDetailRecord = Omit<Invoice, "client"> & {
@@ -93,36 +111,75 @@ const transitionIconMap = {
 
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const { user } = useAuth();
-  const { can } = usePermissions();
+  const { can, role } = usePermissions();
+  const { currentOrg } = useOrgStore();
+  const { openPortal, isLoading: portalLoading } = useStripePortal();
   const addToast = useUIStore((s) => s.addToast);
   const [invoice, setInvoice] = useState<InvoiceDetailRecord | null>(null);
   const [activity, setActivity] = useState<InvoiceActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
   const [recordingReminder, setRecordingReminder] = useState(false);
+  const [recordingPayment, setRecordingPayment] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const intent = searchParams.get("intent");
 
   const fetchInvoice = useCallback(async () => {
     const sb = getSupabaseBrowserClient();
-    const [invoiceRes, activityRes] = await Promise.all([
-      sb
-        .from("invoices")
-        .select("*, client:clients(*), items:invoice_items(*)")
-        .eq("id", id)
-        .single(),
-      sb
-        .from("activity_log")
-        .select("*, profile:profiles(full_name, avatar_url)")
-        .eq("entity_type", "invoice")
-        .eq("entity_id", id)
-        .order("created_at", { ascending: false })
-        .limit(10),
-    ]);
+    let invoiceQuery = sb
+      .from("invoices")
+      .select("*, client:clients(*), items:invoice_items(*)")
+      .eq("id", id);
+    if (isVendorRole(role)) {
+      const assignedClientIds = await fetchVendorAssignedClientIds(
+        sb,
+        currentOrg?.id ?? "",
+        user?.id
+      );
+      if (assignedClientIds.length === 0) {
+        setInvoice(null);
+        setActivity([]);
+        setLoading(false);
+        return;
+      }
 
-    setInvoice((invoiceRes.data as InvoiceDetailRecord | null) ?? null);
-    setActivity((activityRes.data ?? []) as InvoiceActivityEntry[]);
+      invoiceQuery = invoiceQuery.in("client_id", assignedClientIds);
+    }
+
+    const invoiceRes = await invoiceQuery.single();
+    const nextInvoice = (invoiceRes.data as InvoiceDetailRecord | null) ?? null;
+
+    if (!nextInvoice) {
+      setInvoice(null);
+      setActivity([]);
+      setLoading(false);
+      return;
+    }
+
+    const activityRes = await sb
+      .from("activity_log")
+      .select("id, action, entity_type, entity_id, metadata, created_at, profile:profiles(full_name, avatar_url, email)")
+      .eq("org_id", nextInvoice.org_id)
+      .order("created_at", { ascending: false })
+      .limit(60);
+
+    const filteredActivity = filterInvoiceHistoryEntries(
+      (activityRes.data ?? []).map((entry) => ({
+        ...(entry as Omit<InvoiceActivityEntry, "profile">),
+        profile: Array.isArray(entry.profile)
+          ? entry.profile[0] ?? null
+          : entry.profile ?? null,
+      })),
+      nextInvoice.id,
+      nextInvoice.invoice_number
+    ) as InvoiceActivityEntry[];
+
+    setInvoice(nextInvoice);
+    setActivity(filteredActivity);
     setLoading(false);
-  }, [id]);
+  }, [currentOrg?.id, id, role, user?.id]);
 
   useEffect(() => {
     if (id) {
@@ -184,7 +241,123 @@ export default function InvoiceDetailPage() {
     setRecordingReminder(false);
   }
 
+  async function recordPayment() {
+    if (!invoice || !user) {
+      return;
+    }
+
+    const amount = Number(paymentAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      addToast({
+        type: "error",
+        title: "Invalid payment amount",
+        description: "Enter a positive value to record payment.",
+      });
+      return;
+    }
+
+    const currentPaid = Number(invoice.amount_paid) || 0;
+    const total = Number(invoice.total) || 0;
+    const nextPaid = Math.min(currentPaid + amount, total);
+    const balance = Math.max(total - nextPaid, 0);
+    const nextStatus = balance === 0 ? "paid" : invoice.status;
+    const nowIso = new Date().toISOString();
+
+    setRecordingPayment(true);
+    const sb = getSupabaseBrowserClient();
+
+    const { error: invoiceError } = await sb
+      .from("invoices")
+      .update({
+        amount_paid: nextPaid,
+        status: nextStatus,
+        paid_at: balance === 0 ? nowIso : invoice.paid_at,
+      })
+      .eq("id", invoice.id);
+
+    if (invoiceError) {
+      addToast({
+        type: "error",
+        title: "Payment recording failed",
+        description: invoiceError.message,
+      });
+      setRecordingPayment(false);
+      return;
+    }
+
+    await sb.from("activity_log").insert({
+      org_id: invoice.org_id,
+      user_id: user.id,
+      entity_type: "billing",
+      entity_id: invoice.id,
+      action: "payment_recorded",
+      metadata: {
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number,
+        amount,
+        resulting_amount_paid: nextPaid,
+        resulting_balance: balance,
+        fully_paid: balance === 0,
+        source: "manual_reconciliation",
+      },
+    });
+
+    await logInvoiceActivity({
+      orgId: invoice.org_id,
+      userId: user.id,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoice_number,
+      action: "invoice.payment_recorded",
+      metadata: {
+        amount,
+        resulting_amount_paid: nextPaid,
+        resulting_balance: balance,
+        fully_paid: balance === 0,
+        source: "manual_reconciliation",
+      },
+    });
+
+    setPaymentAmount("");
+    setRecordingPayment(false);
+    await fetchInvoice();
+    addToast({
+      type: "success",
+      title: balance === 0 ? "Invoice settled" : "Payment recorded",
+      description:
+        balance === 0
+          ? `${invoice.invoice_number} is now fully reconciled.`
+          : `${fmt(amount)} applied. ${fmt(balance)} still outstanding.`,
+    });
+  }
+
+  async function logRecoveryReview() {
+    if (!invoice) {
+      return;
+    }
+
+    await logInvoiceActivity({
+      orgId: invoice.org_id,
+      userId: user?.id ?? null,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoice_number,
+      action: "invoice.recovery_reviewed",
+      metadata: {
+        outstanding_amount: paymentSummary.outstandingAmount,
+        collected_amount: paymentSummary.collectedAmount,
+        source_intent: intent ?? "inline",
+      },
+    });
+
+    await fetchInvoice();
+    addToast({
+      type: "success",
+      title: "Recovery review logged",
+      description: "This invoice now has an explicit collections review event in its timeline.",
+    });
+  }
+
   const canUpdateInvoices = can("invoices:update");
+  const canManageBilling = can("org:billing");
   const transitions = invoice ? getInvoiceTransitions(invoice.status) : [];
   const client = invoice?.client ?? null;
   const latestReminder = getLatestReminderEntry(activity);
@@ -196,6 +369,87 @@ export default function InvoiceDetailPage() {
     () => buildWorkflowAccountabilityMap(activity).get(id) ?? null,
     [activity, id]
   );
+  const paymentSummary = useMemo(
+    () =>
+      invoice
+        ? getInvoicePaymentSummary(invoice)
+        : {
+            collectedAmount: 0,
+            outstandingAmount: 0,
+            isSettled: false,
+            isPartial: false,
+            paymentProgress: 0,
+            collectionLabel: "Awaiting collection",
+            collectionTone: "default" as const,
+          },
+    [invoice]
+  );
+  const historyEvents = useMemo(
+    () =>
+      buildInvoiceHistoryEvents(
+        activity.map((entry) => ({
+          id: entry.id,
+          action: entry.action,
+          entity_id: entry.entity_id,
+          created_at: entry.created_at,
+          metadata: entry.metadata ?? {},
+          actor: {
+            full_name: entry.profile?.full_name ?? null,
+            email: entry.profile?.email ?? null,
+          },
+        })) as InvoiceHistoryEntryRecord[]
+      ),
+    [activity]
+  );
+
+  useEffect(() => {
+    if (!invoice || !intent || paymentAmount || paymentSummary.isSettled) {
+      return;
+    }
+
+    if (intent === "record-payment") {
+      setPaymentAmount(String(paymentSummary.outstandingAmount));
+    }
+  }, [intent, invoice, paymentAmount, paymentSummary.isSettled, paymentSummary.outstandingAmount]);
+  const canRecordPayment =
+    invoice?.status !== "draft" &&
+    invoice?.status !== "cancelled" &&
+    !paymentSummary.isSettled;
+  const recoveryGuidance = paymentSummary.isSettled
+    ? {
+        title: "Collections complete",
+        detail: "This invoice is fully settled. Keep the payment history below as your audit trail.",
+        tone: "success" as const,
+      }
+    : invoice?.status === "draft" || invoice?.status === "cancelled"
+      ? {
+          title: "Invoice is not collectible",
+          detail: "Draft and cancelled invoices should not enter recovery until they are sent live again.",
+          tone: "default" as const,
+        }
+      : invoice?.status === "overdue" && paymentSummary.isPartial
+        ? {
+            title: "Escalate remaining balance",
+            detail: "Part of the cash is in, but a residual balance is overdue. Confirm next collection step and keep the timeline updated.",
+            tone: "danger" as const,
+          }
+        : invoice?.status === "overdue"
+          ? {
+              title: "Recovery action needed",
+              detail: "This invoice is overdue with open balance. Route it into collections follow-up or payment recovery immediately.",
+              tone: "danger" as const,
+            }
+          : paymentSummary.isPartial
+            ? {
+                title: "Partial collection in progress",
+                detail: "Some cash has landed. Record further receipts here and monitor the remaining balance until fully settled.",
+                tone: "info" as const,
+              }
+            : {
+                title: "Open balance to collect",
+                detail: "Invoice is live with unpaid balance. Track payment attempts and record manual receipts here when they arrive.",
+                tone: "warning" as const,
+              };
 
   if (loading) {
     return (
@@ -214,7 +468,7 @@ export default function InvoiceDetailPage() {
       <div className="flex flex-col items-center justify-center py-20">
         <FileText className="mb-4 h-12 w-12 text-neutral-300" />
         <h2 className="text-lg font-medium text-neutral-900 dark:text-white">
-          Invoice not found
+          {isVendorRole(role) ? "No assigned invoice found" : "Invoice not found"}
         </h2>
         <Link href="/dashboard/invoices">
           <Button variant="ghost" className="mt-4">
@@ -247,6 +501,9 @@ export default function InvoiceDetailPage() {
               <StatusBadge status={invoice.status} />
               {invoice.status === "overdue" && (
                 <Badge variant="warning">Collections attention</Badge>
+              )}
+              {intent === "record-payment" && (
+                <Badge variant="info">Recovery mode</Badge>
               )}
             </div>
             <p className="mt-1 text-sm text-neutral-500">
@@ -313,10 +570,10 @@ export default function InvoiceDetailPage() {
             </div>
             <div className="text-left md:text-right">
               <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">
-                Amount due
+                Balance remaining
               </p>
               <p className="mt-2 text-3xl font-semibold text-neutral-900 dark:text-white">
-                {fmt(Number(invoice.total))}
+                {fmt(paymentSummary.outstandingAmount)}
               </p>
               <p className="mt-1 flex items-center gap-1 text-sm text-neutral-500 md:justify-end">
                 <Clock className="h-3.5 w-3.5" />
@@ -401,10 +658,22 @@ export default function InvoiceDetailPage() {
               )}
               <div className="flex justify-between border-t border-neutral-200 pt-2 dark:border-neutral-700">
                 <span className="text-sm font-semibold text-neutral-900 dark:text-white">
-                  Total
+                  Total billed
                 </span>
                 <span className="text-lg font-semibold text-neutral-900 dark:text-white">
                   {fmt(Number(invoice.total))}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-neutral-500">Collected</span>
+                <span className="text-emerald-600">
+                  {fmt(paymentSummary.collectedAmount)}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-neutral-500">Remaining</span>
+                <span className="text-neutral-900 dark:text-white">
+                  {fmt(paymentSummary.outstandingAmount)}
                 </span>
               </div>
             </div>
@@ -423,6 +692,90 @@ export default function InvoiceDetailPage() {
         </Card>
 
         <div className="space-y-4">
+          <Card>
+            <div className="flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-neutral-500" />
+              <CardTitle>Payment operations</CardTitle>
+            </div>
+            <CardDescription>
+              Reconcile collected cash and keep the residual balance current.
+            </CardDescription>
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm text-neutral-500">Collections posture</p>
+                <p className="mt-1 text-lg font-semibold text-neutral-900 dark:text-white">
+                  {paymentSummary.collectionLabel}
+                </p>
+              </div>
+              <Badge
+                variant={
+                  paymentSummary.collectionTone === "default"
+                    ? "outline"
+                    : paymentSummary.collectionTone
+                }
+              >
+                {paymentSummary.collectionLabel}
+              </Badge>
+            </div>
+            <div className="mt-4 h-2 rounded-full bg-neutral-100 dark:bg-neutral-800">
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+                style={{ width: `${paymentSummary.paymentProgress}%` }}
+              />
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">Collected</p>
+                <p className="mt-2 text-xl font-semibold text-neutral-900 dark:text-white">
+                  {fmt(paymentSummary.collectedAmount)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">Remaining</p>
+                <p className="mt-2 text-xl font-semibold text-neutral-900 dark:text-white">
+                  {fmt(paymentSummary.outstandingAmount)}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 text-neutral-400" />
+                <div>
+                  <p className="text-sm font-medium text-neutral-900 dark:text-white">Manual reconciliation</p>
+                  <p className="mt-1 text-sm text-neutral-500">
+                    Use this when cash was received outside an automated Stripe event and finance needs the invoice balance reflected immediately.
+                  </p>
+                </div>
+              </div>
+
+              {canUpdateInvoices && canRecordPayment ? (
+                <div className="mt-4 space-y-3">
+                  <Input
+                    label="Payment amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={paymentAmount}
+                    onChange={(event) => setPaymentAmount(event.target.value)}
+                    hint={`Current remaining balance: ${fmt(paymentSummary.outstandingAmount)}`}
+                  />
+                  <Button onClick={recordPayment} isLoading={recordingPayment}>
+                    Record payment
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-lg border border-dashed border-neutral-200 p-3 text-sm text-neutral-500 dark:border-neutral-800">
+                  {invoice.status === "draft" || invoice.status === "cancelled"
+                    ? "Payments can only be recorded once an invoice is live."
+                    : canUpdateInvoices
+                      ? "This invoice is already fully settled."
+                      : "Your role can review payment posture here while reconciliation stays with operators."}
+                </div>
+              )}
+            </div>
+          </Card>
+
           <Card>
             <CardTitle>Lifecycle controls</CardTitle>
             <CardDescription>
@@ -459,11 +812,28 @@ export default function InvoiceDetailPage() {
           </Card>
 
           <Card>
-            <CardTitle>Collections context</CardTitle>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-neutral-500" />
+              <CardTitle>Recovery guidance</CardTitle>
+            </div>
             <CardDescription>
-              Operating guidance for the current billing posture.
+              Role-aware next steps for the current billing and collections posture.
             </CardDescription>
             <div className="mt-4 space-y-3 text-sm text-neutral-600 dark:text-neutral-300">
+              <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm text-neutral-500">Recommended action</p>
+                    <p className="mt-1 text-lg font-semibold text-neutral-900 dark:text-white">
+                      {recoveryGuidance.title}
+                    </p>
+                  </div>
+                  <Badge variant={recoveryGuidance.tone === "default" ? "outline" : recoveryGuidance.tone}>
+                    {role ?? "member"}
+                  </Badge>
+                </div>
+                <p className="mt-3 text-sm text-neutral-500">{recoveryGuidance.detail}</p>
+              </div>
               <div className="rounded-xl bg-neutral-50 p-3 dark:bg-neutral-800/40">
                 {getReminderRecommendation(invoice)}
               </div>
@@ -536,11 +906,98 @@ export default function InvoiceDetailPage() {
                     </span>
                   </div>
                   <p className="pt-1 text-neutral-400">
-                    {canUpdateInvoices
-                      ? "Use reminder logging and lifecycle controls to keep ownership visible as this invoice moves."
-                      : "Your role can audit who owns this invoice and when it was last worked, while updates stay with operators."}
+                    {canManageBilling
+                      ? "Finance-capable roles can route payment recovery from billing while keeping ownership visible here."
+                      : canUpdateInvoices
+                        ? "Use reminder logging, reconciliation, and lifecycle controls to keep ownership visible as this invoice moves."
+                        : isVendorRole(role)
+                          ? "Your vendor seat can monitor assigned invoice posture while collections changes stay with internal operators."
+                          : "Your role can audit who owns this invoice and when it was last worked, while updates stay with operators."}
                   </p>
                 </div>
+              </div>
+              <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60">
+                <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                  {canManageBilling
+                    ? "Open billing portal"
+                    : canUpdateInvoices
+                      ? "Record a payment"
+                      : "Monitor payment history"}
+                </p>
+                <p className="mt-1 text-sm text-neutral-500">
+                  {canManageBilling
+                    ? "Use the Stripe portal for payment method issues, invoice recovery, and customer billing updates."
+                    : canUpdateInvoices
+                      ? "Use manual reconciliation above to keep the invoice balance and audit trail current."
+                      : "You have read-only access here. Review the timeline and escalate to a manager or admin when action is needed."}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  {canManageBilling && currentOrg?.stripe_customer_id && (
+                    <Button
+                      variant="outline"
+                      onClick={() => currentOrg && openPortal(currentOrg.id)}
+                      isLoading={portalLoading}
+                      rightIcon={<ExternalLink className="h-3.5 w-3.5" />}
+                    >
+                      Open billing portal
+                    </Button>
+                  )}
+                  {canUpdateInvoices && !canManageBilling && canRecordPayment && (
+                    <Button onClick={() => setPaymentAmount(String(paymentSummary.outstandingAmount))}>
+                      Prefill remaining balance
+                    </Button>
+                  )}
+                  {canUpdateInvoices && invoice.status !== "overdue" && paymentSummary.outstandingAmount > 0 && (
+                    <Button variant="outline" onClick={() => handleStatusTransition("overdue")}>
+                      Escalate to overdue
+                    </Button>
+                  )}
+                  {canUpdateInvoices && paymentSummary.outstandingAmount > 0 && (
+                    <Button variant="ghost" onClick={logRecoveryReview}>
+                      Log recovery review
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-neutral-500" />
+              <CardTitle>Payment history</CardTitle>
+            </div>
+            <CardDescription>
+              Invoice-level payment and status events that support reconciliation and audit review.
+            </CardDescription>
+            <div className="mt-4 space-y-3">
+              {historyEvents.length > 0 ? (
+                historyEvents.map((summary) => (
+                  <div
+                    key={summary.id}
+                    className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/60"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-neutral-900 dark:text-white">{summary.title}</p>
+                        <p className="mt-1 text-xs text-neutral-400">
+                          {summary.actorName} - {timeAgo(summary.createdAt)}
+                        </p>
+                      </div>
+                      <Badge variant={summary.tone === "default" ? "outline" : summary.tone}>
+                        {summary.title}
+                      </Badge>
+                    </div>
+                    <p className="mt-3 text-sm text-neutral-500">{summary.detail}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-neutral-800">
+                  Payment history will appear here as the invoice moves through send, reconciliation, and recovery actions.
+                </div>
+              )}
+              <div className="rounded-xl border border-dashed border-neutral-200 p-4 text-sm text-neutral-500 dark:border-neutral-800">
+                Refunds, credits, and void workflows will slot into this timeline once the extended billing-ledger schema is enabled in a later Phase 3 step.
               </div>
             </div>
           </Card>

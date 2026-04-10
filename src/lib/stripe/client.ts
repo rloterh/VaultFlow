@@ -1,13 +1,18 @@
 import Stripe from "stripe";
+import { getStripeSecretKey } from "@/lib/env";
 
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error("STRIPE_SECRET_KEY is not set");
+let stripeClient: Stripe | null = null;
+
+export function getStripeClient() {
+  if (stripeClient) return stripeClient;
+
+  stripeClient = new Stripe(getStripeSecretKey(), {
+    apiVersion: "2024-12-18.acacia",
+    typescript: true,
+  });
+
+  return stripeClient;
 }
-
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2024-12-18.acacia",
-  typescript: true,
-});
 
 // ============================================
 // PRICE IDS — set these in Stripe Dashboard
@@ -31,6 +36,8 @@ export async function getOrCreateCustomer(
   email: string,
   existingCustomerId?: string | null
 ): Promise<string> {
+  const stripe = getStripeClient();
+
   if (existingCustomerId) {
     try {
       await stripe.customers.retrieve(existingCustomerId);
@@ -59,6 +66,7 @@ export async function createCheckoutSession(
   successUrl: string,
   cancelUrl: string
 ): Promise<string> {
+  const stripe = getStripeClient();
   const session = await stripe.checkout.sessions.create({
     customer: customerId,
     mode: "subscription",
@@ -83,6 +91,7 @@ export async function createPortalSession(
   customerId: string,
   returnUrl: string
 ): Promise<string> {
+  const stripe = getStripeClient();
   const session = await stripe.billingPortal.sessions.create({
     customer: customerId,
     return_url: returnUrl,
@@ -97,6 +106,7 @@ export async function createPortalSession(
 export async function getActiveSubscription(
   customerId: string
 ): Promise<Stripe.Subscription | null> {
+  const stripe = getStripeClient();
   const subscriptions = await stripe.subscriptions.list({
     customer: customerId,
     status: "active",
