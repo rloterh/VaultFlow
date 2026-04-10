@@ -2,6 +2,7 @@ import type { CollectionsQueuePreset } from "@/lib/collections/queue";
 import type { ClientHealthState } from "@/lib/clients/insights";
 
 export type ClientHealthFilter = "all" | ClientHealthState;
+export type ClientTouchFilter = "all" | "untouched" | "recent" | "stale";
 export type ClientOpsViewId =
   | "all-accounts"
   | "collections-focus"
@@ -61,6 +62,12 @@ export function isCollectionsQueuePreset(
   return ["all", "needs-touch", "overdue", "unreminded"].includes(value ?? "");
 }
 
+export function isClientTouchFilter(
+  value: string | null | undefined
+): value is ClientTouchFilter {
+  return ["all", "untouched", "recent", "stale"].includes(value ?? "");
+}
+
 export function isClientOpsViewId(
   value: string | null | undefined
 ): value is ClientOpsViewId {
@@ -115,4 +122,40 @@ export function buildClientOpsViewHref(
   });
 
   return `/dashboard/clients?${params.toString()}`;
+}
+
+function getDaysSince(value: string) {
+  return Math.floor(
+    (Date.now() - new Date(value).getTime()) / (1000 * 60 * 60 * 24)
+  );
+}
+
+export function matchesClientTouchFilter(
+  latestReminderAt: string | null,
+  hasOpenCollections: boolean,
+  filter: ClientTouchFilter
+) {
+  if (filter === "all") {
+    return true;
+  }
+
+  if (!hasOpenCollections) {
+    return false;
+  }
+
+  if (filter === "untouched") {
+    return latestReminderAt === null;
+  }
+
+  if (!latestReminderAt) {
+    return false;
+  }
+
+  const daysSinceReminder = getDaysSince(latestReminderAt);
+
+  if (filter === "recent") {
+    return daysSinceReminder <= 7;
+  }
+
+  return daysSinceReminder > 7;
 }

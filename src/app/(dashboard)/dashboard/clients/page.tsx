@@ -45,9 +45,12 @@ import {
   getClientOpsView,
   isClientHealthFilter,
   isClientOpsViewId,
+  isClientTouchFilter,
   isCollectionsQueuePreset,
+  matchesClientTouchFilter,
   type ClientHealthFilter,
   type ClientOpsViewId,
+  type ClientTouchFilter,
 } from "@/lib/operations/client-views";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useOrgStore } from "@/stores/org-store";
@@ -104,6 +107,7 @@ function ClientsPageContent() {
   const routeViewParam = searchParams.get("view");
   const routeHealthParam = searchParams.get("health");
   const routeQueueParam = searchParams.get("queue");
+  const routeTouchParam = searchParams.get("touch");
   const routeView = isClientOpsViewId(routeViewParam) ? routeViewParam : null;
   const activeView = getClientOpsView(routeView ?? storedClientOpsView);
   const healthFilter = isClientHealthFilter(routeHealthParam)
@@ -112,6 +116,9 @@ function ClientsPageContent() {
   const queuePreset = isCollectionsQueuePreset(routeQueueParam)
     ? routeQueueParam
     : activeView.queuePreset;
+  const touchFilter = isClientTouchFilter(routeTouchParam)
+    ? routeTouchParam
+    : "all";
 
   const fetchClients = useCallback(async () => {
     if (!currentOrg) {
@@ -265,9 +272,14 @@ function ClientsPageContent() {
       const matchesHealth =
         healthFilter === "all" ? true : client.snapshot.health === healthFilter;
       const matchesQueue = matchesClientQueuePreset(client.collections, queuePreset);
-      return matchesHealth && matchesQueue;
+      const matchesTouch = matchesClientTouchFilter(
+        client.collections.latestReminderAt,
+        client.collections.openInvoices > 0,
+        touchFilter
+      );
+      return matchesHealth && matchesQueue && matchesTouch;
     });
-  }, [clients, healthFilter, queuePreset]);
+  }, [clients, healthFilter, queuePreset, touchFilter]);
 
   const prioritizedClients = useMemo(() => {
     return [...filteredClients]
@@ -290,13 +302,19 @@ function ClientsPageContent() {
 
   function replaceClientView(
     nextHealth: ClientHealthFilter,
-    nextQueuePreset: CollectionsQueuePreset
+    nextQueuePreset: CollectionsQueuePreset,
+    nextTouchFilter: ClientTouchFilter = touchFilter
   ) {
     const params = new URLSearchParams(searchParams.toString());
     const matchedView = findMatchingClientOpsView(nextHealth, nextQueuePreset);
 
     params.set("health", nextHealth);
     params.set("queue", nextQueuePreset);
+    if (nextTouchFilter === "all") {
+      params.delete("touch");
+    } else {
+      params.set("touch", nextTouchFilter);
+    }
     if (matchedView) {
       params.set("view", matchedView.id);
       setClientOpsView(matchedView.id);
@@ -316,11 +334,19 @@ function ClientsPageContent() {
     replaceClientView(healthFilter, nextPreset);
   }
 
+  function setTouchFilter(nextFilter: ClientTouchFilter) {
+    replaceClientView(healthFilter, queuePreset, nextFilter);
+  }
+
   function applySavedView(viewId: ClientOpsViewId) {
     const view = getClientOpsView(viewId);
     setQueuePreset(view.queuePreset);
     setClientOpsView(view.id);
-    router.replace(buildClientOpsViewHref(view.id));
+    const href = new URL(buildClientOpsViewHref(view.id), "http://localhost");
+    if (touchFilter !== "all") {
+      href.searchParams.set("touch", touchFilter);
+    }
+    router.replace(`${href.pathname}?${href.searchParams.toString()}`);
   }
 
   const activeSavedView = findMatchingClientOpsView(healthFilter, queuePreset);
@@ -330,6 +356,30 @@ function ClientsPageContent() {
     "unreminded-open": clients.filter((client) => client.collections.unreminded > 0).length,
     "all-accounts": metrics.total,
   };
+  const touchFilterCounts: Record<ClientTouchFilter, number> = {
+    all: clients.filter((client) => client.collections.openInvoices > 0).length,
+    untouched: clients.filter(
+      (client) =>
+        client.collections.openInvoices > 0 &&
+        client.collections.latestReminderAt === null
+    ).length,
+    recent: clients.filter((client) =>
+      matchesClientTouchFilter(
+        client.collections.latestReminderAt,
+        client.collections.openInvoices > 0,
+        "recent"
+      )
+    ).length,
+    stale: clients.filter((client) =>
+      matchesClientTouchFilter(
+        client.collections.latestReminderAt,
+        client.collections.openInvoices > 0,
+        "stale"
+      )
+    ).length,
+  };
+  const matchingInvoicesHref = `/dashboard/invoices?queue=${queuePreset}`;
+  const matchingReportsHref = `/dashboard/reports?queue=${queuePreset}`;
 
   const columns: Column<ClientOperationalRow>[] = [
     {
@@ -571,6 +621,23 @@ function ClientsPageContent() {
             <p className="mt-1 text-sm text-neutral-500">
               Use filters when you need a temporary custom slice without leaving the saved workspace pattern.
             </p>
+            <p className="mt-2 text-xs text-neutral-400">
+              {can("invoices:update")
+                ? "Operators can jump from this account view into queue-matched invoices and record reminder work there."
+                : "Your role is optimized for monitoring account health while invoice workflow updates stay with operators."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link href={matchingInvoicesHref}>
+                <Button size="sm" variant="outline">
+                  Open matching invoices
+                </Button>
+              </Link>
+              <Link href={matchingReportsHref}>
+                <Button size="sm" variant="ghost">
+                  Open matching reports
+                </Button>
+              </Link>
+            </div>
           </div>
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2">
@@ -613,6 +680,27 @@ function ClientsPageContent() {
                   }`}
                 >
                   {entry.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { label: "All touchpoints", value: "all" as const },
+                { label: "Untouched", value: "untouched" as const },
+                { label: "Recent", value: "recent" as const },
+                { label: "Stale", value: "stale" as const },
+              ].map((entry) => (
+                <button
+                  key={entry.value}
+                  type="button"
+                  onClick={() => setTouchFilter(entry.value)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                    touchFilter === entry.value
+                      ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
+                      : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                  }`}
+                >
+                  {entry.label} ({touchFilterCounts[entry.value]})
                 </button>
               ))}
             </div>
@@ -744,7 +832,9 @@ function ClientsPageContent() {
                 ? canCreateClients
                   ? "Add your first client to start sending invoices."
                   : "Client accounts will appear here as your team adds them."
-                : "Adjust the saved view or filters to widen the account roster."
+                : touchFilter === "all"
+                  ? "Adjust the saved view or filters to widen the account roster."
+                  : "This reminder cadence filter is narrower than the current account workload."
             }
             actionLabel={
               clients.length === 0 ? (canCreateClients ? "Add client" : undefined) : "Show all accounts"

@@ -147,24 +147,39 @@ export default function InvoicesPage() {
 
   useEffect(() => {
     if (!clients.length || typeof window === "undefined" || !canCreateInvoices) {
-      return;
+      if (typeof window === "undefined") {
+        return;
+      }
     }
 
     const params = new URLSearchParams(window.location.search);
     const clientId = params.get("clientId");
     const compose = params.get("compose");
+    const queue = params.get("queue");
 
-    if (compose === "1") {
+    if (canCreateInvoices && compose === "1") {
       setComposerOpen(true);
     }
 
-    if (clientId && clients.some((client) => client.id === clientId)) {
+    if (
+      queue &&
+      ["all", "needs-touch", "overdue", "unreminded"].includes(queue) &&
+      queue !== collectionsPreset
+    ) {
+      setCollectionsPreset(queue as typeof collectionsPreset);
+    }
+
+    if (
+      canCreateInvoices &&
+      clientId &&
+      clients.some((client) => client.id === clientId)
+    ) {
       setDraftForm((current) => ({
         ...current,
         client_id: clientId,
       }));
     }
-  }, [canCreateInvoices, clients]);
+  }, [canCreateInvoices, clients, collectionsPreset, setCollectionsPreset]);
 
   async function createDraftInvoice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

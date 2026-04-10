@@ -258,6 +258,21 @@ function ReportsContent() {
 
   useInvoiceRealtime(currentOrg?.id, fetchReports);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const queue = new URLSearchParams(window.location.search).get("queue");
+    if (
+      queue &&
+      ["all", "needs-touch", "overdue", "unreminded"].includes(queue) &&
+      queue !== queuePreset
+    ) {
+      setQueuePreset(queue as typeof queuePreset);
+    }
+  }, [queuePreset, setQueuePreset]);
+
   function handleFilterChange<K extends keyof ReportFilters>(
     key: K,
     value: ReportFilters[K]
