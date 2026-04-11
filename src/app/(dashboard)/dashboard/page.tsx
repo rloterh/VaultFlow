@@ -38,7 +38,9 @@ import {
   buildClientOpsViewHref,
   getClientOpsViewForQueuePreset,
 } from "@/lib/operations/client-views";
+import { buildOperatorHandoff } from "@/lib/operations/daily-handoff";
 import {
+  buildClientWorkspaceHref,
   buildBillingRecoveryPresetHref,
   buildReportPresetHref,
 } from "@/lib/operations/launchpad";
@@ -321,6 +323,25 @@ export default function DashboardPage() {
         .slice(0, 2),
     [currentOrg?.id, savedBillingRecoveryPresets]
   );
+  const operatorHandoff = useMemo(
+    () =>
+      buildOperatorHandoff({
+        queue: queueSummary,
+        accountability: accountabilitySummary,
+        reportSummary: operationsPulse.summary,
+        savedClientViews: clientLaunchViews,
+        savedReportPresets: reportLaunchViews,
+        savedBillingPresets: billingLaunchViews,
+      }),
+    [
+      accountabilitySummary,
+      billingLaunchViews,
+      clientLaunchViews,
+      operationsPulse.summary,
+      queueSummary,
+      reportLaunchViews,
+    ]
+  );
 
   async function handleRecordReminder(invoice: Invoice) {
     setReminderInvoiceId(invoice.id);
@@ -374,6 +395,50 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                Daily handoff
+              </p>
+              <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                {operatorHandoff.title}
+              </p>
+              <p className="mt-2 max-w-2xl text-sm text-neutral-500 dark:text-neutral-400">
+                {operatorHandoff.detail}
+              </p>
+            </div>
+            <Link href="/dashboard/invoices" className="inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+              Open invoice workspace
+            </Link>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+            {operatorHandoff.actions.map((action) => (
+              <Link
+                key={`${action.category}-${action.href}`}
+                href={action.href}
+                className="rounded-xl border border-neutral-200/70 p-4 transition-colors hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <Badge variant="outline">{action.category}</Badge>
+                    <p className="mt-3 text-sm font-semibold text-neutral-900 dark:text-white">
+                      {action.title}
+                    </p>
+                    <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                      {action.detail}
+                    </p>
+                  </div>
+                  <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                </div>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      </motion.div>
+
+      <motion.div variants={item}>
+        <Card>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
                 Operator launchpad
               </p>
               <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
@@ -405,10 +470,7 @@ export default function DashboardPage() {
                   clientLaunchViews.map((view) => (
                     <Link
                       key={view.id}
-                      href={buildClientOpsViewHref(view.health === "all" && view.queuePreset === "all" ? "all-accounts" : view.queuePreset === "overdue" ? "at-risk-accounts" : view.queuePreset === "unreminded" ? "unreminded-open" : "collections-focus", {
-                        health: view.health,
-                        queuePreset: view.queuePreset,
-                      }) + (view.touchFilter === "all" ? "" : `&touch=${view.touchFilter}`)}
+                      href={buildClientWorkspaceHref(view)}
                       className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
                     >
                       <div>
