@@ -7,8 +7,7 @@ Ship VaultFlow with predictable runtime configuration, healthy Stripe connectivi
 ## Pre-Deploy Checklist
 
 1. Confirm the target branch has passed:
-   - `cmd /c node_modules\.bin\tsc.cmd --noEmit --pretty false -p tsconfig.typecheck.json`
-   - `cmd /c npm run build`
+   - `npm run verify`
 2. Confirm all required environment variables are present in the target environment.
 3. Confirm Supabase schema is current through `supabase-schema-v5.sql`.
 4. Confirm Stripe webhook signing secret matches the deployed environment.
@@ -37,6 +36,7 @@ Ship VaultFlow with predictable runtime configuration, healthy Stripe connectivi
    - role enum and RLS policies are present
    - `vendor_client_assignments` exists
    - Stripe invoice/payment event tables and columns exist through Phase 3
+4. Prefer converting the root SQL files into tracked Supabase CLI migrations before high-frequency production releases, so schema rollout becomes auditable and repeatable.
 
 ## Stripe Release Steps
 

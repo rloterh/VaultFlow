@@ -85,8 +85,7 @@ npm run dev
 ### 5. Verify locally
 
 ```bash
-cmd /c node_modules\.bin\tsc.cmd --noEmit --pretty false -p tsconfig.typecheck.json
-cmd /c npm run build
+npm run verify
 ```
 
 ## Environment Variables
@@ -162,6 +161,6 @@ doc/
 
 ## Additional Notes
 
-- `supabase/` is intentionally kept outside normal source control flow in this workspace.
+- `supabase/` is treated as local CLI state and is ignored from source control in this workspace.
 - Vendor access is assignment-scoped through `vendor_client_assignments`.
 - Governance and billing lifecycle helpers are concentrated under `src/lib/`.
