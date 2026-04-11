@@ -57,6 +57,7 @@ import {
   type ClientOpsViewId,
   type ClientTouchFilter,
 } from "@/lib/operations/client-views";
+import { buildClientWorkspaceBriefing } from "@/lib/operations/workspace-briefing";
 import {
   fetchVendorAssignedClientIds,
   isVendorRole,
@@ -433,6 +434,66 @@ function ClientsPageContent() {
   };
   const matchingInvoicesHref = `/dashboard/invoices?queue=${queuePreset}`;
   const matchingReportsHref = `/dashboard/reports?queue=${queuePreset}`;
+  const filteredMetrics = useMemo(() => {
+    const openExposure = filteredClients.reduce(
+      (sum, client) => sum + client.collections.totalOutstanding,
+      0
+    );
+    const needsTouch = filteredClients.reduce(
+      (sum, client) => sum + client.collections.needsTouch,
+      0
+    );
+    const overdue = filteredClients.filter(
+      (client) => client.collections.overdue > 0
+    ).length;
+    const unreminded = filteredClients.filter(
+      (client) => client.collections.unreminded > 0
+    ).length;
+    const untouched = filteredClients.filter(
+      (client) =>
+        client.collections.openInvoices > 0 &&
+        client.collections.latestReminderAt === null
+    ).length;
+    const stale = filteredClients.filter((client) =>
+      matchesClientTouchFilter(
+        client.collections.latestReminderAt,
+        client.collections.openInvoices > 0,
+        "stale"
+      )
+    ).length;
+
+    return {
+      accounts: filteredClients.length,
+      openExposure,
+      needsTouch,
+      overdue,
+      unreminded,
+      untouched,
+      stale,
+    };
+  }, [filteredClients]);
+  const workspaceBriefing = useMemo(
+    () =>
+      buildClientWorkspaceBriefing({
+        label:
+          activeCustomWorkspaceView?.label ??
+          activeSavedView?.label ??
+          activeView.label,
+        healthFilter,
+        queuePreset,
+        touchFilter,
+        ...filteredMetrics,
+      }),
+    [
+      activeCustomWorkspaceView?.label,
+      activeSavedView?.label,
+      activeView.label,
+      filteredMetrics,
+      healthFilter,
+      queuePreset,
+      touchFilter,
+    ]
+  );
 
   function applyCustomWorkspaceView(viewId: string) {
     const view = customWorkspaceViews.find((entry) => entry.id === viewId);
@@ -944,6 +1005,72 @@ function ClientsPageContent() {
           </div>
         </div>
 
+        <div className="mt-5 rounded-2xl border border-neutral-200/70 bg-white/80 p-5 dark:border-neutral-800 dark:bg-neutral-950/50">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={workspaceBriefing.tone}>Workspace briefing</Badge>
+                <Badge variant="outline">
+                  {activeCustomWorkspaceView?.label ??
+                    activeSavedView?.label ??
+                    activeView.label}
+                </Badge>
+              </div>
+              <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                {workspaceBriefing.title}
+              </p>
+              <p className="mt-2 text-sm text-neutral-500">
+                {workspaceBriefing.detail}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link href={matchingInvoicesHref}>
+                <Button size="sm" variant="outline">
+                  Open matching invoices
+                </Button>
+              </Link>
+              <Link href={matchingReportsHref}>
+                <Button size="sm" variant="ghost">
+                  Open matching reports
+                </Button>
+              </Link>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+            {workspaceBriefing.stats.map((stat) => (
+              <div
+                key={stat.label}
+                className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/70"
+              >
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                  {stat.label}
+                </p>
+                <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+                  {stat.value}
+                </p>
+                <p className="mt-2 text-sm text-neutral-500">{stat.detail}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 rounded-xl border border-dashed border-neutral-200 px-4 py-4 dark:border-neutral-800">
+            <p className="text-sm font-medium text-neutral-900 dark:text-white">
+              Recommended next moves
+            </p>
+            <div className="mt-3 space-y-2">
+              {workspaceBriefing.recommendations.map((entry) => (
+                <p
+                  key={entry}
+                  className="text-sm text-neutral-500 dark:text-neutral-400"
+                >
+                  {entry}
+                </p>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-sm font-medium text-neutral-900 dark:text-white">
@@ -957,18 +1084,6 @@ function ClientsPageContent() {
                 ? "Operators can jump from this account view into queue-matched invoices and record reminder work there."
                 : "Your role is optimized for monitoring account health while invoice workflow updates stay with operators."}
             </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Link href={matchingInvoicesHref}>
-                <Button size="sm" variant="outline">
-                  Open matching invoices
-                </Button>
-              </Link>
-              <Link href={matchingReportsHref}>
-                <Button size="sm" variant="ghost">
-                  Open matching reports
-                </Button>
-              </Link>
-            </div>
           </div>
           <div className="space-y-2">
             <div className="flex flex-wrap gap-2">
