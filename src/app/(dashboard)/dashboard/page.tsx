@@ -5,8 +5,9 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import {
   BellRing,
+  BriefcaseBusiness,
   DollarSign, FileText, Users, TrendingUp,
-  Plus, ArrowUpRight, Clock,
+  Plus, ArrowUpRight, Clock, LayoutList, LineChart,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,6 +38,10 @@ import {
   buildClientOpsViewHref,
   getClientOpsViewForQueuePreset,
 } from "@/lib/operations/client-views";
+import {
+  buildBillingRecoveryPresetHref,
+  buildReportPresetHref,
+} from "@/lib/operations/launchpad";
 import {
   buildWorkflowAccountabilityMap,
   summarizeQueueAccountability,
@@ -72,6 +77,9 @@ export default function DashboardPage() {
   const addToast = useUIStore((s) => s.addToast);
   const queuePreset = useUIStore((s) => s.collectionsPreset);
   const setQueuePreset = useUIStore((s) => s.setCollectionsPreset);
+  const savedClientWorkspaceViews = useUIStore((s) => s.savedClientWorkspaceViews);
+  const savedReportPresets = useUIStore((s) => s.savedReportPresets);
+  const savedBillingRecoveryPresets = useUIStore((s) => s.savedBillingRecoveryPresets);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>([]);
@@ -286,6 +294,33 @@ export default function DashboardPage() {
     const insightMap = buildClientInsightMap(invoices);
     return rankClientAccounts(clients, insightMap).slice(0, 4);
   }, [clients, invoices]);
+  const clientLaunchViews = useMemo(
+    () =>
+      savedClientWorkspaceViews
+        .filter((view) => view.orgId === currentOrg?.id)
+        .slice()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 2),
+    [currentOrg?.id, savedClientWorkspaceViews]
+  );
+  const reportLaunchViews = useMemo(
+    () =>
+      savedReportPresets
+        .filter((preset) => preset.orgId === currentOrg?.id)
+        .slice()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 2),
+    [currentOrg?.id, savedReportPresets]
+  );
+  const billingLaunchViews = useMemo(
+    () =>
+      savedBillingRecoveryPresets
+        .filter((preset) => preset.orgId === currentOrg?.id)
+        .slice()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 2),
+    [currentOrg?.id, savedBillingRecoveryPresets]
+  );
 
   async function handleRecordReminder(invoice: Invoice) {
     setReminderInvoiceId(invoice.id);
@@ -332,6 +367,137 @@ export default function DashboardPage() {
           </p>
         </div>
         <Link href={primaryAction.href}><Button leftIcon={primaryAction.icon}>{primaryAction.label}</Button></Link>
+      </motion.div>
+
+      <motion.div variants={item}>
+        <Card>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                Operator launchpad
+              </p>
+              <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                Reopen saved workspaces without rebuilding context
+              </p>
+              <p className="mt-2 max-w-2xl text-sm text-neutral-500 dark:text-neutral-400">
+                Jump straight into the client, reporting, and billing slices your team uses most often. These links preserve the saved state you built in Phase 5.
+              </p>
+            </div>
+            <Link href="/dashboard/reports" className="inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+              Open full reporting workspace
+            </Link>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-3">
+            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+              <div className="flex items-center gap-2">
+                <LayoutList className="h-4 w-4 text-neutral-500" />
+                <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                  Client workspaces
+                </p>
+              </div>
+              <div className="mt-4 space-y-3">
+                {clientLaunchViews.length === 0 ? (
+                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                    Save a client workspace view to pin it here for faster collections and account review.
+                  </p>
+                ) : (
+                  clientLaunchViews.map((view) => (
+                    <Link
+                      key={view.id}
+                      href={buildClientOpsViewHref(view.health === "all" && view.queuePreset === "all" ? "all-accounts" : view.queuePreset === "overdue" ? "at-risk-accounts" : view.queuePreset === "unreminded" ? "unreminded-open" : "collections-focus", {
+                        health: view.health,
+                        queuePreset: view.queuePreset,
+                      }) + (view.touchFilter === "all" ? "" : `&touch=${view.touchFilter}`)}
+                      className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                          {view.label}
+                        </p>
+                        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                          {view.health === "all" ? "all health" : view.health} | {view.queuePreset} | {view.touchFilter === "all" ? "all touchpoints" : view.touchFilter}
+                        </p>
+                      </div>
+                      <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                    </Link>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+              <div className="flex items-center gap-2">
+                <LineChart className="h-4 w-4 text-neutral-500" />
+                <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                  Report presets
+                </p>
+              </div>
+              <div className="mt-4 space-y-3">
+                {reportLaunchViews.length === 0 ? (
+                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                    Save a report preset to pin a recurring analytics view here.
+                  </p>
+                ) : (
+                  reportLaunchViews.map((preset) => (
+                    <Link
+                      key={preset.id}
+                      href={buildReportPresetHref({
+                        range: preset.range,
+                        status: preset.status,
+                      })}
+                      className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                          {preset.label}
+                        </p>
+                        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                          {preset.range} | {preset.status === "all" ? "all statuses" : preset.status}
+                        </p>
+                      </div>
+                      <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                    </Link>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+              <div className="flex items-center gap-2">
+                <BriefcaseBusiness className="h-4 w-4 text-neutral-500" />
+                <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                  Billing recovery
+                </p>
+              </div>
+              <div className="mt-4 space-y-3">
+                {billingLaunchViews.length === 0 ? (
+                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                    Save a billing recovery preset to pin finance handoff queues here.
+                  </p>
+                ) : (
+                  billingLaunchViews.map((preset) => (
+                    <Link
+                      key={preset.id}
+                      href={buildBillingRecoveryPresetHref(preset.preset)}
+                      className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                          {preset.label}
+                        </p>
+                        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                          {preset.preset} recovery queue
+                        </p>
+                      </div>
+                      <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                    </Link>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </Card>
       </motion.div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -510,7 +676,7 @@ export default function DashboardPage() {
                             ? `Owned by ${accountabilityByInvoiceId.get(item.invoice.id)?.ownerName}`
                             : "No workflow owner recorded yet"}
                           {accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt
-                            ? ` · Last touch ${timeAgo(accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt ?? "")}`
+                            ? ` | Last touch ${timeAgo(accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt ?? "")}`
                             : ""}
                         </p>
                       </div>

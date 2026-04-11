@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -157,6 +158,7 @@ type BillingFetchState = {
 function BillingContent() {
   const { currentOrg } = useOrgStore();
   const { can, role } = usePermissions();
+  const searchParams = useSearchParams();
   const { checkout, isLoading: checkoutLoading } = useStripeCheckout();
   const { openPortal, isLoading: portalLoading } = useStripePortal();
   const addToast = useUIStore((state) => state.addToast);
@@ -270,6 +272,17 @@ function BillingContent() {
       isActive = false;
     };
   }, [currentOrg]);
+
+  useEffect(() => {
+    const nextPreset = searchParams.get("recovery");
+    if (
+      nextPreset &&
+      RECOVERY_PRESETS.some((entry) => entry.value === nextPreset) &&
+      nextPreset !== recoveryPreset
+    ) {
+      setRecoveryPreset(nextPreset as PaymentRecoveryPreset);
+    }
+  }, [recoveryPreset, searchParams]);
 
   const invoiceLimit = PLANS[currentPlan].invoiceLimit;
   const memberLimit = PLANS[currentPlan].memberLimit;

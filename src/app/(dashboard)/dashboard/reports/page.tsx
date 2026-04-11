@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
@@ -210,6 +211,7 @@ function ReportsContent() {
   const { user } = useAuth();
   const { currentOrg } = useOrgStore();
   const { can, role } = usePermissions();
+  const searchParams = useSearchParams();
   const addToast = useUIStore((state) => state.addToast);
   const queuePreset = useUIStore((state) => state.collectionsPreset);
   const setQueuePreset = useUIStore((state) => state.setCollectionsPreset);
@@ -332,6 +334,38 @@ function ReportsContent() {
   useEffect(() => {
     fetchReports();
   }, [fetchReports]);
+
+  useEffect(() => {
+    const range = searchParams.get("range");
+    const status = searchParams.get("status");
+
+    const nextRange = RANGE_OPTIONS.some((option) => option.value === range)
+      ? (range as ReportRange)
+      : null;
+    const nextStatus = STATUS_OPTIONS.some((option) => option.value === status)
+      ? (status as ReportFilters["status"])
+      : null;
+
+    if (!nextRange && !nextStatus) {
+      return;
+    }
+
+    setFilters((current) => {
+      const resolved = {
+        range: nextRange ?? current.range,
+        status: nextStatus ?? current.status,
+      };
+
+      if (
+        resolved.range === current.range &&
+        resolved.status === current.status
+      ) {
+        return current;
+      }
+
+      return resolved;
+    });
+  }, [searchParams]);
 
   useInvoiceRealtime(currentOrg?.id, fetchReports);
 
