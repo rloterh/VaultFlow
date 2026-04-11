@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Bell, Clock3 } from "lucide-react";
+import { Bell, Clock3, LineChart, Shield, Wallet } from "lucide-react";
 import { ActionMenu, type ActionMenuSection } from "@/components/ui/action-menu";
 import { ROLE_METADATA } from "@/config/roles";
+import {
+  isBillingControlActivityAction,
+  isGovernanceActivityAction,
+} from "@/lib/admin/governance";
 import {
   getActivityHeadline,
   getActivityIcon,
@@ -120,9 +124,77 @@ function getNotificationsSummary(role: ReturnType<typeof usePermissions>["role"]
   return "High-signal activity from your current workspace.";
 }
 
+function buildNotificationQuickActions({
+  role,
+  canBilling,
+  canOpenActivity,
+  attentionCount,
+  billingCount,
+  governanceCount,
+}: {
+  role: ReturnType<typeof usePermissions>["role"];
+  canBilling: boolean;
+  canOpenActivity: boolean;
+  attentionCount: number;
+  billingCount: number;
+  governanceCount: number;
+}) {
+  const actions = [];
+
+  if (canBilling && (attentionCount > 0 || billingCount > 0)) {
+    actions.push({
+      label: role === "finance_manager" ? "Open billing recovery" : "Open billing workspace",
+      description:
+        billingCount > 0
+          ? `${billingCount} billing signal${billingCount === 1 ? "" : "s"} are active in the recent feed.`
+          : "Jump directly into the billing and recovery workspace.",
+      href: "/settings/billing",
+      icon: Wallet,
+    });
+  }
+
+  if ((role === "admin" || role === "owner") && governanceCount > 0) {
+    actions.push({
+      label: "Open admin overview",
+      description: `${governanceCount} governance event${governanceCount === 1 ? "" : "s"} may need control-plane review.`,
+      href: "/dashboard/admin",
+      icon: Shield,
+    });
+  }
+
+  if (role === "vendor") {
+    actions.push({
+      label: "Open assigned clients",
+      description: attentionCount > 0
+        ? "Review the accounts in your assigned scope that may need escalation."
+        : "Return to your assigned client workspace.",
+      href: "/dashboard/clients",
+      icon: Bell,
+    });
+  } else if (role === "viewer" || role === "member") {
+    actions.push({
+      label: "Open oversight reports",
+      description: "Review the workspace from a read-only reporting lane.",
+      href: "/dashboard/reports",
+      icon: LineChart,
+    });
+  }
+
+  if (canOpenActivity) {
+    actions.push({
+      label: "Open activity timeline",
+      description: "Use the full audit timeline when you need deeper context and routing.",
+      href: "/dashboard/activity",
+      icon: Clock3,
+    });
+  }
+
+  return actions.slice(0, 3);
+}
+
 export function NotificationsMenu() {
   const { currentOrg } = useOrgStore();
-  const { role } = usePermissions();
+  const { role, can, hasRole } = usePermissions();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
 
   const fetchNotifications = useCallback(async () => {
@@ -168,6 +240,20 @@ export function NotificationsMenu() {
     .slice(0, 5);
   const attentionCount = attentionEntries.length;
   const roleTitle = role ? ROLE_METADATA[role].title : "Workspace";
+  const billingCount = prioritizedEntries.filter((entry) =>
+    isBillingControlActivityAction(entry.action, entry.entity_type)
+  ).length;
+  const governanceCount = prioritizedEntries.filter((entry) =>
+    isGovernanceActivityAction(entry.action, entry.entity_type)
+  ).length;
+  const quickActions = buildNotificationQuickActions({
+    role,
+    canBilling: can("org:billing"),
+    canOpenActivity: hasRole("manager"),
+    attentionCount,
+    billingCount,
+    governanceCount,
+  });
 
   const sections: ActionMenuSection[] = [];
 
@@ -197,6 +283,13 @@ export function NotificationsMenu() {
         href: getActivityDestination(entry, role),
         icon: getActivityIcon(entry.action),
       })),
+    });
+  }
+
+  if (quickActions.length > 0) {
+    sections.push({
+      label: "Recommended next steps",
+      items: quickActions,
     });
   }
 
@@ -237,6 +330,19 @@ export function NotificationsMenu() {
           <p className="mt-1 text-xs text-neutral-500">
             {roleTitle} notifications. {getNotificationsSummary(role, attentionCount)}
           </p>
+          {entries.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] font-medium text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300">
+                {attentionCount} attention
+              </span>
+              <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] font-medium text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300">
+                {billingCount} billing
+              </span>
+              <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-1 text-[11px] font-medium text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300">
+                {governanceCount} governance
+              </span>
+            </div>
+          ) : null}
         </div>
       }
       renderTrigger={() => (
