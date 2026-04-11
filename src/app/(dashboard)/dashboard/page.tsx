@@ -48,6 +48,7 @@ import {
   buildWorkflowAccountabilityMap,
   summarizeQueueAccountability,
 } from "@/lib/operations/accountability";
+import { buildDashboardIntelligenceSnapshot } from "@/lib/operations/dashboard-intelligence";
 import { buildReportSnapshot } from "@/lib/reports/analytics";
 import {
   fetchVendorAssignedClientIds,
@@ -405,6 +406,16 @@ export default function DashboardPage() {
         reportLaunchViews,
       ]
     );
+  const intelligenceSnapshot = useMemo(
+    () =>
+      buildDashboardIntelligenceSnapshot({
+        invoices,
+        clients,
+        activity,
+        scopeLabel: isVendorDashboard ? "assigned portfolio" : "workspace",
+      }),
+    [activity, clients, invoices, isVendorDashboard]
+  );
 
   async function handleRecordReminder(invoice: Invoice) {
     setReminderInvoiceId(invoice.id);
@@ -665,6 +676,105 @@ export default function DashboardPage() {
         <MetricCard label={isVendorDashboard ? "Assigned clients" : "Active Clients"} value={String(stats?.activeClients ?? 0)} change={`+${stats?.clientsChange}`} trend="up" icon={Users} iconColor="bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400" index={2} />
         <MetricCard label={isVendorDashboard ? "Assigned overdue" : "Overdue"} value={fmt(stats?.overdueAmount ?? 0)} change={`${stats?.overdueChange}%`} trend="down" icon={TrendingUp} iconColor="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400" index={3} />
       </div>
+
+      <motion.div variants={item}>
+        <Card>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                Intelligence layer
+              </p>
+              <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                Forecasted cash and anomaly signals
+              </p>
+              <p className="mt-2 max-w-2xl text-sm text-neutral-500 dark:text-neutral-400">
+                {isVendorDashboard
+                  ? "A scoped read on the assigned portfolio with predictive signals for overdue concentration, follow-through lag, and short-horizon collection risk."
+                  : "Short-horizon intelligence for collection pace, overdue concentration, and recovery freshness across the current workspace."}
+              </p>
+            </div>
+            <Link href="/dashboard/reports?range=90d&status=all" className="inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+              Open reporting baseline
+            </Link>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+            <div className="grid gap-3 sm:grid-cols-3">
+              {intelligenceSnapshot.forecastMetrics.map((metric) => (
+                <div
+                  key={metric.label}
+                  className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                      {metric.label}
+                    </p>
+                    <Badge
+                      variant={
+                        metric.tone === "danger"
+                          ? "danger"
+                          : metric.tone === "warning"
+                            ? "warning"
+                            : metric.tone === "success"
+                              ? "success"
+                              : "outline"
+                      }
+                    >
+                      {metric.tone}
+                    </Badge>
+                  </div>
+                  <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {metric.value}
+                  </p>
+                  <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                    {metric.detail}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-3">
+              {intelligenceSnapshot.alerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Badge
+                        variant={
+                          alert.tone === "danger"
+                            ? "danger"
+                            : alert.tone === "warning"
+                              ? "warning"
+                              : alert.tone === "success"
+                                ? "success"
+                                : "outline"
+                        }
+                      >
+                        {alert.tone === "success" ? "stable" : "anomaly"}
+                      </Badge>
+                      <p className="mt-3 text-sm font-semibold text-neutral-900 dark:text-white">
+                        {alert.title}
+                      </p>
+                      <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                        {alert.detail}
+                      </p>
+                    </div>
+                    <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                  </div>
+                  <Link
+                    href={alert.href}
+                    className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white"
+                  >
+                    {alert.actionLabel}
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      </motion.div>
 
       <motion.div variants={item} className="grid gap-4 lg:grid-cols-3">
         <Card>
