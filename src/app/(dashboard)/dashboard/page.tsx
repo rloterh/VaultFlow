@@ -267,6 +267,67 @@ export default function DashboardPage() {
         label: "Open reports",
         icon: <ArrowUpRight className="h-4 w-4" />,
       };
+  const canOpenReportsWorkspace = permissions.can("reports:read");
+  const canOpenBillingWorkspace = permissions.can("org:billing");
+  const launchpadPrimaryLink = isVendorDashboard
+    ? {
+        href: "/dashboard/clients",
+        label: "Open assigned client workspace",
+      }
+    : canOpenReportsWorkspace
+      ? {
+          href: "/dashboard/reports",
+          label: "Open full reporting workspace",
+        }
+      : {
+          href: "/dashboard/invoices",
+          label: "Open invoice workspace",
+        };
+  const launchpadDescription = isVendorDashboard
+    ? "Jump straight into the assigned-client and invoice surfaces your vendor seat can safely use without rebuilding context."
+    : permissions.role === "viewer" || permissions.role === "member"
+      ? "Reopen saved oversight workspaces for client and reporting review without stepping into mutation-only billing paths."
+      : "Jump straight into the client, reporting, and billing slices your team uses most often. These links preserve the saved state you built in Phase 5.";
+  const workspaceShortcuts = isVendorDashboard
+    ? [
+        {
+          title: "Assigned invoices",
+          href: "/dashboard/invoices",
+          description: "Review the invoice portfolio scoped to your vendor seat.",
+        },
+        {
+          title: "Assigned clients",
+          href: "/dashboard/clients",
+          description: "Open the client workspace with your assignment-backed visibility.",
+        },
+      ]
+    : permissions.role === "viewer" || permissions.role === "member"
+      ? [
+          {
+            title: "Invoice oversight",
+            href: "/dashboard/invoices",
+            description: "Review invoice posture without opening operator-only billing controls.",
+          },
+          {
+            title: "Client oversight",
+            href: "/dashboard/clients",
+            description: "Validate account health, ownership, and recent activity in context.",
+          },
+        ]
+      : canOpenBillingWorkspace
+        ? []
+        : [
+            {
+              title: "Invoice workspace",
+              href: "/dashboard/invoices",
+              description: "Open the active invoice lane alongside your saved workspaces.",
+            },
+            {
+              title: "Client workspace",
+              href: "/dashboard/clients",
+              description: "Review account-level posture without switching contexts manually.",
+            },
+          ];
   const biggestExposure = operationsPulse.topClients[0];
   const collectionsQueue = useMemo(
     () => buildCollectionsQueue(invoices, reminders),
@@ -326,6 +387,7 @@ export default function DashboardPage() {
   const operatorHandoff = useMemo(
     () =>
       buildOperatorHandoff({
+        role: permissions.role,
         queue: queueSummary,
         accountability: accountabilitySummary,
         reportSummary: operationsPulse.summary,
@@ -334,14 +396,15 @@ export default function DashboardPage() {
         savedBillingPresets: billingLaunchViews,
       }),
     [
-      accountabilitySummary,
-      billingLaunchViews,
-      clientLaunchViews,
-      operationsPulse.summary,
-      queueSummary,
-      reportLaunchViews,
-    ]
-  );
+        accountabilitySummary,
+        billingLaunchViews,
+        clientLaunchViews,
+        operationsPulse.summary,
+        permissions.role,
+        queueSummary,
+        reportLaunchViews,
+      ]
+    );
 
   async function handleRecordReminder(invoice: Invoice) {
     setReminderInvoiceId(invoice.id);
@@ -441,20 +504,20 @@ export default function DashboardPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
                 Operator launchpad
               </p>
-              <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
-                Reopen saved workspaces without rebuilding context
-              </p>
-              <p className="mt-2 max-w-2xl text-sm text-neutral-500 dark:text-neutral-400">
-                Jump straight into the client, reporting, and billing slices your team uses most often. These links preserve the saved state you built in Phase 5.
-              </p>
+                <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                  Reopen saved workspaces without rebuilding context
+                </p>
+                <p className="mt-2 max-w-2xl text-sm text-neutral-500 dark:text-neutral-400">
+                  {launchpadDescription}
+                </p>
+              </div>
+              <Link href={launchpadPrimaryLink.href} className="inline-flex text-sm font-medium text-neutral-900 dark:text-white">
+                {launchpadPrimaryLink.label}
+              </Link>
             </div>
-            <Link href="/dashboard/reports" className="inline-flex text-sm font-medium text-neutral-900 dark:text-white">
-              Open full reporting workspace
-            </Link>
-          </div>
 
-          <div className="mt-5 grid gap-4 xl:grid-cols-3">
-            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+            <div className="mt-5 grid gap-4 xl:grid-cols-3">
+              <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
               <div className="flex items-center gap-2">
                 <LayoutList className="h-4 w-4 text-neutral-500" />
                 <p className="text-sm font-semibold text-neutral-900 dark:text-white">
@@ -466,8 +529,8 @@ export default function DashboardPage() {
                   <p className="text-sm text-neutral-500 dark:text-neutral-400">
                     Save a client workspace view to pin it here for faster collections and account review.
                   </p>
-                ) : (
-                  clientLaunchViews.map((view) => (
+                  ) : (
+                    clientLaunchViews.map((view) => (
                     <Link
                       key={view.id}
                       href={buildClientWorkspaceHref(view)}
@@ -484,83 +547,117 @@ export default function DashboardPage() {
                       <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
                     </Link>
                   ))
-                )}
+                  )}
+                </div>
               </div>
-            </div>
 
-            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
-              <div className="flex items-center gap-2">
-                <LineChart className="h-4 w-4 text-neutral-500" />
-                <p className="text-sm font-semibold text-neutral-900 dark:text-white">
-                  Report presets
-                </p>
-              </div>
-              <div className="mt-4 space-y-3">
-                {reportLaunchViews.length === 0 ? (
-                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                    Save a report preset to pin a recurring analytics view here.
-                  </p>
-                ) : (
-                  reportLaunchViews.map((preset) => (
-                    <Link
-                      key={preset.id}
-                      href={buildReportPresetHref({
-                        range: preset.range,
-                        status: preset.status,
-                      })}
-                      className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
-                    >
-                      <div>
-                        <p className="text-sm font-medium text-neutral-900 dark:text-white">
-                          {preset.label}
-                        </p>
-                        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                          {preset.range} | {preset.status === "all" ? "all statuses" : preset.status}
-                        </p>
-                      </div>
-                      <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
-                    </Link>
-                  ))
-                )}
-              </div>
-            </div>
+              {canOpenReportsWorkspace ? (
+                <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+                  <div className="flex items-center gap-2">
+                    <LineChart className="h-4 w-4 text-neutral-500" />
+                    <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                      Report presets
+                    </p>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {reportLaunchViews.length === 0 ? (
+                      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                        Save a report preset to pin a recurring analytics view here.
+                      </p>
+                    ) : (
+                      reportLaunchViews.map((preset) => (
+                        <Link
+                          key={preset.id}
+                          href={buildReportPresetHref({
+                            range: preset.range,
+                            status: preset.status,
+                          })}
+                          className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
+                        >
+                          <div>
+                            <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                              {preset.label}
+                            </p>
+                            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                              {preset.range} | {preset.status === "all" ? "all statuses" : preset.status}
+                            </p>
+                          </div>
+                          <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                        </Link>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
 
-            <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
-              <div className="flex items-center gap-2">
-                <BriefcaseBusiness className="h-4 w-4 text-neutral-500" />
-                <p className="text-sm font-semibold text-neutral-900 dark:text-white">
-                  Billing recovery
-                </p>
-              </div>
-              <div className="mt-4 space-y-3">
-                {billingLaunchViews.length === 0 ? (
-                  <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                    Save a billing recovery preset to pin finance handoff queues here.
-                  </p>
-                ) : (
-                  billingLaunchViews.map((preset) => (
-                    <Link
-                      key={preset.id}
-                      href={buildBillingRecoveryPresetHref(preset.preset)}
-                      className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
-                    >
-                      <div>
-                        <p className="text-sm font-medium text-neutral-900 dark:text-white">
-                          {preset.label}
-                        </p>
-                        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                          {preset.preset} recovery queue
-                        </p>
-                      </div>
-                      <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
-                    </Link>
-                  ))
-                )}
-              </div>
+              {canOpenBillingWorkspace ? (
+                <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+                  <div className="flex items-center gap-2">
+                    <BriefcaseBusiness className="h-4 w-4 text-neutral-500" />
+                    <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                      Billing recovery
+                    </p>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {billingLaunchViews.length === 0 ? (
+                      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                        Save a billing recovery preset to pin finance handoff queues here.
+                      </p>
+                    ) : (
+                      billingLaunchViews.map((preset) => (
+                        <Link
+                          key={preset.id}
+                          href={buildBillingRecoveryPresetHref(preset.preset)}
+                          className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
+                        >
+                          <div>
+                            <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                              {preset.label}
+                            </p>
+                            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                              {preset.preset} recovery queue
+                            </p>
+                          </div>
+                          <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                        </Link>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {workspaceShortcuts.length > 0 ? (
+                <div className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-neutral-500" />
+                    <p className="text-sm font-semibold text-neutral-900 dark:text-white">
+                      Workspace shortcuts
+                    </p>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {workspaceShortcuts.map((shortcut) => (
+                      <Link
+                        key={shortcut.href}
+                        href={shortcut.href}
+                        className="flex items-start justify-between gap-3 rounded-lg transition-colors hover:bg-neutral-50 dark:hover:bg-neutral-900/50"
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                            {shortcut.title}
+                          </p>
+                          <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                            {shortcut.description}
+                          </p>
+                        </div>
+                        <ArrowUpRight className="mt-0.5 h-4 w-4 text-neutral-400" />
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          </div>
-        </Card>
-      </motion.div>
+          </Card>
+        </motion.div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label={isVendorDashboard ? "Assigned revenue" : "Total Revenue"} value={fmt(stats?.totalRevenue ?? 0)} change={`+${stats?.revenueChange}%`} trend="up" icon={DollarSign} iconColor="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400" index={0} />

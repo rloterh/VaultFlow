@@ -103,6 +103,66 @@ const STATUS_OPTIONS: Array<{ value: InvoiceStatus | "all"; label: string }> = [
 ];
 const EMPTY_REPORT = buildReportSnapshot([], [], { range: "90d", status: "all" });
 
+function getReportRoleDescription(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "finance_manager") {
+    return "A finance-ready view of collections pressure, recovery posture, and invoice throughput across the workspace.";
+  }
+
+  if (role === "viewer") {
+    return "A read-only oversight view of collections, invoice throughput, and account exposure across the workspace.";
+  }
+
+  if (isVendorRole(role)) {
+    return "A scoped reporting view of only the clients and invoices assigned to your vendor seat.";
+  }
+
+  return "A live operational view of collections, invoice throughput, and account exposure across your workspace.";
+}
+
+function getReportGuardrailCopy(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "manager") {
+    return "Export is reserved for finance managers, admins, and owners.";
+  }
+
+  if (role === "viewer") {
+    return "You can review the workspace analytics in read-only mode and escalate anything that needs export or finance action.";
+  }
+
+  if (isVendorRole(role)) {
+    return "Your vendor seat can review scoped analytics, but export stays with internal finance-capable roles.";
+  }
+
+  return "Export is unavailable for your current workspace role.";
+}
+
+function getEmptyReportDescription(role: ReturnType<typeof usePermissions>["role"]) {
+  if (isVendorRole(role)) {
+    return "Your assigned portfolio does not currently have invoices in this filter slice. Reset filters or wait for new scoped activity.";
+  }
+
+  if (role === "viewer") {
+    return "Adjust the reporting window or choose a different status to bring more oversight data into view.";
+  }
+
+  if (role === "finance_manager") {
+    return "Adjust the reporting window or choose a different status to bring recovery and billing data back into the active slice.";
+  }
+
+  return "Adjust the reporting window or choose a different status to bring records into view.";
+}
+
+function getMatchingClientViewLabel(role: ReturnType<typeof usePermissions>["role"]) {
+  if (isVendorRole(role)) {
+    return "Open matching assigned client view";
+  }
+
+  if (role === "viewer") {
+    return "Open matching oversight client view";
+  }
+
+  return "Open matching client view";
+}
+
 function fmt(value: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -631,14 +691,19 @@ function ReportsContent() {
             Reports
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            {role === "finance_manager"
-              ? "A finance-ready view of collections pressure, recovery posture, and invoice throughput across the workspace."
-              : role === "viewer"
-                ? "A read-only oversight view of collections, invoice throughput, and account exposure across the workspace."
-                : isVendorRole(role)
-                  ? "A scoped reporting view of only the clients and invoices assigned to your vendor seat."
-                  : "A live operational view of collections, invoice throughput, and account exposure across your workspace."}
+            {getReportRoleDescription(role)}
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Badge variant="outline">
+              {role === "finance_manager"
+                ? "Finance lens"
+                : role === "viewer"
+                  ? "Read-only oversight"
+                  : isVendorRole(role)
+                    ? "Assigned scope"
+                    : "Operator reporting"}
+            </Badge>
+          </div>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           {can("org:billing") && (
@@ -700,17 +765,13 @@ function ReportsContent() {
             >
               Export CSV
             </Button>
-          ) : (
-            <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-              {role === "manager"
-                ? "Export is reserved for finance managers, admins, and owners."
-                : role === "viewer"
-                  ? "You can review the workspace analytics in read-only mode."
-                  : "Export is unavailable for your current workspace role."}
-            </div>
-          )}
+            ) : (
+              <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                {getReportGuardrailCopy(role)}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
@@ -934,14 +995,14 @@ function ReportsContent() {
       </div>
 
       {report.invoices.length === 0 ? (
-        <Card>
-          <EmptyState
-            title="No invoices match these filters"
-            description="Adjust the reporting window or choose a different status to bring records into view."
-            actionLabel="Reset filters"
-            onAction={() => setFilters({ range: "90d", status: "all" })}
-          />
-        </Card>
+          <Card>
+            <EmptyState
+              title="No invoices match these filters"
+              description={getEmptyReportDescription(role)}
+              actionLabel="Reset filters"
+              onAction={() => setFilters({ range: "90d", status: "all" })}
+            />
+          </Card>
       ) : (
         <>
           <Card>
@@ -1069,7 +1130,7 @@ function ReportsContent() {
                   href={matchingClientViewHref}
                   className="inline-flex text-sm font-medium text-neutral-900 dark:text-white"
                 >
-                  Open matching client view
+                  {getMatchingClientViewLabel(role)}
                 </Link>
                 {visibleQueue.length === 0 ? (
                   <p className="py-6 text-center text-sm text-neutral-400">

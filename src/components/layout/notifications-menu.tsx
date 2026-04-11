@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, Clock3 } from "lucide-react";
 import { ActionMenu, type ActionMenuSection } from "@/components/ui/action-menu";
+import { ROLE_METADATA } from "@/config/roles";
 import {
   getActivityHeadline,
   getActivityIcon,
@@ -27,6 +28,96 @@ function timeAgo(value: string) {
 
 function formatBadgeCount(value: number) {
   return value > 9 ? "9+" : String(value);
+}
+
+function getNotificationPriority(entry: ActivityEntry, role: ReturnType<typeof usePermissions>["role"]) {
+  let score = 0;
+
+  if (isAttentionActivity(entry)) {
+    score += 100;
+  }
+
+  const tone = getActivityTone(entry.action);
+  if (tone === "danger") score += 40;
+  if (tone === "warning") score += 24;
+  if (entry.entity_type === "invoice") score += 12;
+  if (entry.entity_type === "client") score += 8;
+
+  if (role === "finance_manager") {
+    if (
+      entry.action.startsWith("payment_") ||
+      entry.action.startsWith("subscription_") ||
+      entry.action.startsWith("invoice.credit") ||
+      entry.action.startsWith("invoice.void") ||
+      entry.action === "invoice.overdue" ||
+      entry.action === "invoice.payment_recorded" ||
+      entry.action === "invoice.stripe_linked"
+    ) {
+      score += 36;
+    }
+  } else if (role === "vendor") {
+    if (entry.entity_type === "invoice" || entry.entity_type === "client") {
+      score += 28;
+    }
+
+    if (
+      entry.action.startsWith("member.") ||
+      entry.action.startsWith("subscription_") ||
+      entry.action === "org.updated"
+    ) {
+      score -= 20;
+    }
+  } else if (role === "viewer" || role === "member") {
+    if (
+      entry.action === "invoice.overdue" ||
+      entry.action === "payment_failed" ||
+      entry.action === "invoice.recovery_reviewed"
+    ) {
+      score += 16;
+    }
+
+    if (entry.action.startsWith("member.") || entry.action === "org.updated") {
+      score -= 10;
+    }
+  } else if (role === "admin" || role === "owner") {
+    if (entry.action.startsWith("member.") || entry.action === "org.updated") {
+      score += 22;
+    }
+  }
+
+  return score;
+}
+
+function getNotificationsSummary(role: ReturnType<typeof usePermissions>["role"], attentionCount: number) {
+  if (attentionCount > 0) {
+    if (role === "finance_manager") {
+      return "Highest-priority billing and recovery signals are pinned to the top for finance follow-through.";
+    }
+
+    if (role === "vendor") {
+      return "Assigned account signals are ranked first so you can review scoped issues and escalate anything that needs internal action.";
+    }
+
+    if (role === "viewer" || role === "member") {
+      return "High-signal oversight items are surfaced first so you can validate risk and route the right operators in.";
+    }
+
+    return "High-signal items are routed to the right operational surface.";
+  }
+
+  if (role === "finance_manager") {
+    return "Billing, recovery, and revenue activity from your current workspace.";
+  }
+
+  if (role === "vendor") {
+    return "Activity from the accounts and invoices assigned to your current vendor scope.";
+  }
+
+  if (role === "viewer" || role === "member") {
+    return "Read-only workspace signals for monitoring health, ownership, and recent changes.";
+  }
+
+  return "High-signal activity from your current workspace.";
 }
 
 export function NotificationsMenu() {
@@ -60,9 +151,23 @@ export function NotificationsMenu() {
     void fetchNotifications();
   }, [fetchNotifications]);
 
-  const attentionEntries = entries.filter(isAttentionActivity).slice(0, 3);
-  const recentEntries = entries.filter((entry) => !isAttentionActivity(entry)).slice(0, 5);
+  const prioritizedEntries = [...entries].sort((left, right) => {
+    const priorityDelta =
+      getNotificationPriority(right, role) - getNotificationPriority(left, role);
+
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+
+    return right.created_at.localeCompare(left.created_at);
+  });
+
+  const attentionEntries = prioritizedEntries.filter(isAttentionActivity).slice(0, 3);
+  const recentEntries = prioritizedEntries
+    .filter((entry) => !isAttentionActivity(entry))
+    .slice(0, 5);
   const attentionCount = attentionEntries.length;
+  const roleTitle = role ? ROLE_METADATA[role].title : "Workspace";
 
   const sections: ActionMenuSection[] = [];
 
@@ -130,9 +235,7 @@ export function NotificationsMenu() {
             )}
           </div>
           <p className="mt-1 text-xs text-neutral-500">
-            {attentionCount > 0
-              ? "High-signal items are routed to the right operational surface."
-              : "High-signal activity from your current workspace."}
+            {roleTitle} notifications. {getNotificationsSummary(role, attentionCount)}
           </p>
         </div>
       }

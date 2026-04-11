@@ -14,10 +14,16 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { usePathname, useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import { ROLE_METADATA, type Role } from "@/config/roles";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useStripePortal } from "@/hooks/use-stripe";
@@ -25,6 +31,10 @@ import {
   buildClientOpsViewHref,
   findMatchingClientOpsView,
 } from "@/lib/operations/client-views";
+import {
+  buildBillingRecoveryPresetHref,
+  buildReportPresetHref,
+} from "@/lib/operations/launchpad";
 import { useUIStore } from "@/stores/ui-store";
 import { cn } from "@/lib/utils/cn";
 
@@ -52,6 +62,70 @@ function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+function getPalettePlaceholder(role: Role | null) {
+  if (role === "finance_manager") {
+    return "Search billing recovery, reports, and finance workflows...";
+  }
+
+  if (role === "vendor") {
+    return "Search assigned clients, invoices, and scoped workflows...";
+  }
+
+  if (role === "viewer" || role === "member") {
+    return "Search oversight views, reports, and monitoring surfaces...";
+  }
+
+  return "Search navigation, workflows, and admin actions...";
+}
+
+function getEmptyStateCopy(role: Role | null) {
+  if (role === "finance_manager") {
+    return "Try searching for billing, recovery, reports, overdue, or portal.";
+  }
+
+  if (role === "vendor") {
+    return "Try searching for assigned clients, invoices, overdue, or collections.";
+  }
+
+  if (role === "viewer" || role === "member") {
+    return "Try searching for reports, invoices, clients, activity, or oversight.";
+  }
+
+  return "Try searching for invoices, billing, reports, team, or collections.";
+}
+
+function getFooterHint(role: Role | null, pathname: string) {
+  if (pathname === "/dashboard") {
+    if (role === "finance_manager") {
+      return "You are on the finance dashboard.";
+    }
+
+    if (role === "vendor") {
+      return "You are on the assigned vendor dashboard.";
+    }
+
+    if (role === "viewer" || role === "member") {
+      return "You are on the oversight dashboard.";
+    }
+
+    return "You are on the main dashboard.";
+  }
+
+  if (role === "finance_manager") {
+    return `Finance route: ${pathname}`;
+  }
+
+  if (role === "vendor") {
+    return `Assigned-scope route: ${pathname}`;
+  }
+
+  if (role === "viewer" || role === "member") {
+    return `Read-only route: ${pathname}`;
+  }
+
+  return `Current route: ${pathname}`;
+}
+
 export function WorkspaceQuickActions() {
   const pathname = usePathname();
   const router = useRouter();
@@ -60,6 +134,8 @@ export function WorkspaceQuickActions() {
   const setCollectionsPreset = useUIStore((s) => s.setCollectionsPreset);
   const setClientOpsView = useUIStore((s) => s.setClientOpsView);
   const savedClientWorkspaceViews = useUIStore((s) => s.savedClientWorkspaceViews);
+  const savedReportPresets = useUIStore((s) => s.savedReportPresets);
+  const savedBillingRecoveryPresets = useUIStore((s) => s.savedBillingRecoveryPresets);
   const { openPortal, isLoading: portalLoading } = useStripePortal();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -76,8 +152,28 @@ export function WorkspaceQuickActions() {
     [currentOrg?.id, savedClientWorkspaceViews]
   );
 
+  const workspaceSavedReportPresets = useMemo(
+    () =>
+      savedReportPresets
+        .filter((preset) => preset.orgId === currentOrg?.id)
+        .slice()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 4),
+    [currentOrg?.id, savedReportPresets]
+  );
+
+  const workspaceSavedBillingPresets = useMemo(
+    () =>
+      savedBillingRecoveryPresets
+        .filter((preset) => preset.orgId === currentOrg?.id)
+        .slice()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 4),
+    [currentOrg?.id, savedBillingRecoveryPresets]
+  );
+
   const commands = useMemo<CommandItem[]>(() => {
-    const navigation = [
+    const navigation: CommandItem[] = [
       {
         id: "nav-dashboard",
         title: "Dashboard",
@@ -91,7 +187,12 @@ export function WorkspaceQuickActions() {
       {
         id: "nav-invoices",
         title: "Invoices",
-        description: "Review invoice operations and lifecycle activity.",
+        description:
+          role === "viewer" || role === "member"
+            ? "Review invoice posture from a read-only oversight lane."
+            : role === "vendor"
+              ? "Review invoice context scoped to your assigned portfolio."
+              : "Review invoice operations and lifecycle activity.",
         section: "Navigate",
         icon: FileText,
         keywords: ["billing", "invoice", "collections", "receivables"],
@@ -101,7 +202,10 @@ export function WorkspaceQuickActions() {
       {
         id: "nav-clients",
         title: "Clients",
-        description: "Open account relationships and exposure views.",
+        description:
+          role === "vendor"
+            ? "Open account relationships and exposure views for your assigned scope."
+            : "Open account relationships and exposure views.",
         section: "Navigate",
         icon: Users,
         keywords: ["accounts", "customers", "relationships"],
@@ -111,7 +215,10 @@ export function WorkspaceQuickActions() {
       {
         id: "nav-reports",
         title: "Reports",
-        description: "Inspect analytics, trends, and reporting posture.",
+        description:
+          role === "viewer" || role === "member"
+            ? "Inspect analytics and trends from a read-only reporting surface."
+            : "Inspect analytics, trends, and reporting posture.",
         section: "Navigate",
         icon: BarChart3,
         keywords: ["analytics", "trends", "export", "finance"],
@@ -161,7 +268,10 @@ export function WorkspaceQuickActions() {
       {
         id: "nav-billing",
         title: "Billing Settings",
-        description: "Manage Stripe posture, plans, and recovery.",
+        description:
+          role === "finance_manager"
+            ? "Manage Stripe posture, payment recovery, and finance controls."
+            : "Manage Stripe posture, plans, and recovery.",
         section: "Navigate",
         icon: CreditCard,
         keywords: ["stripe", "subscription", "payments", "portal"],
@@ -170,11 +280,16 @@ export function WorkspaceQuickActions() {
       },
     ];
 
-    const workflows = [
+    const workflows: CommandItem[] = [
       {
         id: "workflow-collections",
         title: "Collections Focus",
-        description: "Jump into open accounts currently needing follow-up.",
+        description:
+          role === "vendor"
+            ? "Jump into assigned accounts currently needing follow-up from the internal team."
+            : role === "viewer" || role === "member"
+              ? "Open a focused oversight view of accounts currently needing follow-up."
+              : "Jump into open accounts currently needing follow-up.",
         section: "Workflows",
         icon: ArrowRight,
         keywords: ["collections", "needs touch", "follow-up", "queue"],
@@ -188,7 +303,12 @@ export function WorkspaceQuickActions() {
       {
         id: "workflow-risk",
         title: "At-Risk Accounts",
-        description: "Open overdue accounts requiring the fastest attention.",
+        description:
+          role === "vendor"
+            ? "Open overdue accounts in your assigned scope and escalate billing action when needed."
+            : role === "viewer" || role === "member"
+              ? "Review overdue accounts from an oversight lane before routing action."
+              : "Open overdue accounts requiring the fastest attention.",
         section: "Workflows",
         icon: ArrowRight,
         keywords: ["risk", "overdue", "accounts", "collections"],
@@ -202,7 +322,10 @@ export function WorkspaceQuickActions() {
       {
         id: "workflow-unreminded",
         title: "Unreminded Open Invoices",
-        description: "Surface balances without a logged reminder yet.",
+        description:
+          role === "viewer" || role === "member"
+            ? "Surface balances without a logged reminder yet so you can flag them for operators."
+            : "Surface balances without a logged reminder yet.",
         section: "Workflows",
         icon: ArrowRight,
         keywords: ["unreminded", "open", "reminder", "invoices"],
@@ -216,7 +339,10 @@ export function WorkspaceQuickActions() {
       {
         id: "workflow-billing-portal",
         title: "Open Stripe Billing Portal",
-        description: "Jump directly into Stripe billing administration.",
+        description:
+          role === "finance_manager"
+            ? "Jump directly into Stripe billing administration and recovery-safe actions."
+            : "Jump directly into Stripe billing administration.",
         section: "Actions",
         icon: CreditCard,
         keywords: ["portal", "stripe", "billing", "payment method"],
@@ -229,7 +355,36 @@ export function WorkspaceQuickActions() {
       },
     ];
 
-    const savedViews = workspaceSavedViews.map((view) => ({
+    const roleAwareShortcuts: CommandItem[] =
+      role === "vendor"
+        ? [
+            {
+              id: "workflow-vendor-clients",
+              title: "Assigned Client Workspace",
+              description: "Open the client workspace scoped to your assigned vendor accounts.",
+              section: "Workflows",
+              icon: Users,
+              keywords: ["assigned", "vendor", "clients", "scope"],
+              visible: true,
+              run: () => router.push("/dashboard/clients"),
+            },
+          ]
+        : role === "viewer" || role === "member"
+          ? [
+              {
+                id: "workflow-oversight-invoices",
+                title: "Invoice Oversight",
+                description: "Open invoice posture for read-only monitoring and escalation.",
+                section: "Workflows",
+                icon: FileText,
+                keywords: ["oversight", "invoice", "monitoring", "read only"],
+                visible: true,
+                run: () => router.push("/dashboard/invoices"),
+              },
+            ]
+          : [];
+
+    const savedViews: CommandItem[] = workspaceSavedViews.map((view) => ({
       id: `saved-view-${view.id}`,
       title: view.label,
       description: `Open ${view.health === "all" ? "all-health" : view.health} accounts in the ${view.queuePreset} queue with ${view.touchFilter === "all" ? "all touchpoints" : `${view.touchFilter} touchpoint`} coverage.`,
@@ -267,15 +422,72 @@ export function WorkspaceQuickActions() {
       },
     }));
 
-    return [...navigation, ...workflows, ...savedViews].filter((item) => item.visible);
+    const savedReportCommands: CommandItem[] = workspaceSavedReportPresets.map((preset) => ({
+      id: `saved-report-${preset.id}`,
+      title: preset.label,
+      description: `Open the ${preset.range} reporting view with ${preset.status === "all" ? "all invoice statuses" : preset.status} already applied.`,
+      section: "Saved reports",
+      icon: BarChart3,
+      keywords: [
+        "saved",
+        "report",
+        "reporting",
+        "analytics",
+        preset.label,
+        preset.range,
+        preset.status,
+      ],
+      visible: can("reports:read"),
+      run: () => {
+        router.push(
+          buildReportPresetHref({
+            range: preset.range,
+            status: preset.status,
+          })
+        );
+      },
+    }));
+
+    const savedBillingCommands: CommandItem[] = workspaceSavedBillingPresets.map((preset) => ({
+      id: `saved-billing-${preset.id}`,
+      title: preset.label,
+      description: `Open the ${preset.preset} recovery queue from your saved billing handoff presets.`,
+      section: "Saved billing",
+      icon: CreditCard,
+      keywords: [
+        "saved",
+        "billing",
+        "recovery",
+        "stripe",
+        "queue",
+        preset.label,
+        preset.preset,
+      ],
+      visible: can("org:billing"),
+      run: () => {
+        router.push(buildBillingRecoveryPresetHref(preset.preset));
+      },
+    }));
+
+    return [
+      ...navigation,
+      ...workflows,
+      ...roleAwareShortcuts,
+      ...savedViews,
+      ...savedReportCommands,
+      ...savedBillingCommands,
+    ].filter((item) => item.visible);
   }, [
     can,
     currentOrg,
     hasRole,
     openPortal,
+    role,
     router,
     setClientOpsView,
     setCollectionsPreset,
+    workspaceSavedBillingPresets,
+    workspaceSavedReportPresets,
     workspaceSavedViews,
   ]);
 
@@ -422,11 +634,11 @@ export function WorkspaceQuickActions() {
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     onKeyDown={handleSearchKeyDown}
-                    placeholder="Search navigation, workflows, and admin actions..."
+                    placeholder={getPalettePlaceholder(role)}
                     className="w-full bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400 dark:text-white"
                   />
                   <Badge variant="outline" className="hidden sm:inline-flex">
-                    {role ?? "guest"}
+                    {role ? ROLE_METADATA[role].title : "Guest"}
                   </Badge>
                 </div>
               </div>
@@ -438,7 +650,7 @@ export function WorkspaceQuickActions() {
                       No matching command
                     </p>
                     <p className="mt-2 text-sm text-neutral-500">
-                      Try searching for invoices, billing, reports, team, or collections.
+                      {getEmptyStateCopy(role)}
                     </p>
                   </div>
                 ) : (
@@ -487,7 +699,8 @@ export function WorkspaceQuickActions() {
                                     {command.description}
                                   </span>
                                 </span>
-                                {runningId === command.id || (command.id === "workflow-billing-portal" && portalLoading) ? (
+                                {runningId === command.id ||
+                                (command.id === "workflow-billing-portal" && portalLoading) ? (
                                   <span className="text-xs text-neutral-400">Opening...</span>
                                 ) : (
                                   <span className="text-xs text-neutral-400">Enter</span>
@@ -504,11 +717,7 @@ export function WorkspaceQuickActions() {
 
               <div className="flex items-center justify-between border-t border-neutral-100 px-5 py-3 text-xs text-neutral-400 dark:border-neutral-800">
                 <span>Use arrow keys to move, Enter to open, Esc to close.</span>
-                <span className="hidden sm:inline">
-                  {pathname === "/dashboard"
-                    ? "You are on the main dashboard."
-                    : `Current route: ${pathname}`}
-                </span>
+                <span className="hidden sm:inline">{getFooterHint(role, pathname)}</span>
               </div>
             </motion.div>
           </>

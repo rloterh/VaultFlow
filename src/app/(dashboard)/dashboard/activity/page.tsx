@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { Activity, AlertTriangle, CreditCard, Shield } from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { usePermissions } from "@/hooks/use-permissions";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   getActivityIcon,
@@ -74,8 +76,48 @@ function isWorkflowAction(action: string) {
   ].includes(action);
 }
 
+function getActivityRoleDescription(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "finance_manager") {
+    return "Review billing exceptions, recovery reviews, and invoice workflow events without leaving the finance operating lane.";
+  }
+
+  if (role === "admin" || role === "owner") {
+    return "Review workflow, billing, and governance actions across the organization with access-management context included.";
+  }
+
+  return "Review workflow, billing, and governance actions across your organization.";
+}
+
+function getActivityRoleBadge(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "finance_manager") {
+    return "Finance audit";
+  }
+
+  if (role === "admin" || role === "owner") {
+    return "Control plane";
+  }
+
+  return "Operational audit";
+}
+
+function getEmptyActivityCopy(
+  role: ReturnType<typeof usePermissions>["role"],
+  scope: ActivityScope
+) {
+  if (role === "finance_manager" && (scope === "billing" || scope === "collections")) {
+    return "No finance-side events are currently recorded for this scope. Try a broader filter or check back after the next billing action.";
+  }
+
+  if ((role === "admin" || role === "owner") && scope === "governance") {
+    return "No governance changes are recorded for this view. Try another scope or return after the next control-plane action.";
+  }
+
+  return "Try another filter or come back after the next operational action.";
+}
+
 function ActivityPageContent() {
   const { currentOrg } = useOrgStore();
+  const { role, can } = usePermissions();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<ActivityScope>("all");
@@ -198,8 +240,27 @@ function ActivityPageContent() {
           Activity log
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Review workflow, billing, and governance actions across your organization.
+          {getActivityRoleDescription(role)}
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Badge variant="outline">{getActivityRoleBadge(role)}</Badge>
+          {can("org:billing") ? (
+            <Link
+              href="/settings/billing"
+              className="text-xs font-medium text-neutral-600 underline-offset-4 hover:underline dark:text-neutral-300"
+            >
+              Open billing controls
+            </Link>
+          ) : null}
+          {role === "admin" || role === "owner" ? (
+            <Link
+              href="/dashboard/admin"
+              className="text-xs font-medium text-neutral-600 underline-offset-4 hover:underline dark:text-neutral-300"
+            >
+              Open admin overview
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -240,6 +301,14 @@ function ActivityPageContent() {
         ))}
       </div>
 
+      <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 px-4 py-3 text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-400">
+        {role === "finance_manager"
+          ? "Finance focus: billing exceptions and recovery reviews usually carry the most signal for this role."
+          : role === "admin" || role === "owner"
+            ? "Control-plane focus: governance and privileged changes are included alongside the billing and workflow timeline."
+            : "Workflow focus: use the scope chips to narrow the operating timeline to the events that matter most right now."}
+      </div>
+
       <Card>
         {loading ? (
           <div className="space-y-4">
@@ -260,7 +329,7 @@ function ActivityPageContent() {
               No activity recorded for this view.
             </p>
             <p className="mt-1 text-xs text-neutral-400">
-              Try another filter or come back after the next operational action.
+              {getEmptyActivityCopy(role, scope)}
             </p>
           </div>
         ) : (
