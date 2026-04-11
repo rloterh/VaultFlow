@@ -15,11 +15,14 @@ import {
   Building2,
   BookmarkPlus,
   Clock3,
+  Pencil,
   Mail,
   MapPin,
   Plus,
+  Save,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
 import { ClientRowActions } from "@/components/dashboard/client-row-actions";
 import { Avatar, Badge } from "@/components/ui/badge";
@@ -95,12 +98,17 @@ function ClientsPageContent() {
   const storedClientOpsView = useUIStore((s) => s.clientOpsView);
   const savedClientWorkspaceViews = useUIStore((s) => s.savedClientWorkspaceViews);
   const saveClientWorkspaceView = useUIStore((s) => s.saveClientWorkspaceView);
+  const updateClientWorkspaceViewLabel = useUIStore(
+    (s) => s.updateClientWorkspaceViewLabel
+  );
   const removeClientWorkspaceView = useUIStore((s) => s.removeClientWorkspaceView);
   const [clients, setClients] = useState<ClientOperationalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedViewName, setSavedViewName] = useState("");
+  const [editingViewId, setEditingViewId] = useState<string | null>(null);
+  const [editingViewLabel, setEditingViewLabel] = useState("");
   const [clientForm, setClientForm] = useState({
     name: "",
     email: "",
@@ -510,6 +518,62 @@ function ClientsPageContent() {
     });
   }
 
+  function startEditingCustomWorkspaceView(viewId: string, label: string) {
+    setEditingViewId(viewId);
+    setEditingViewLabel(label);
+  }
+
+  function cancelEditingCustomWorkspaceView() {
+    setEditingViewId(null);
+    setEditingViewLabel("");
+  }
+
+  function renameCustomWorkspaceView(viewId: string) {
+    const trimmedLabel = editingViewLabel.trim();
+    const currentView = customWorkspaceViews.find((view) => view.id === viewId);
+
+    if (!currentView) {
+      cancelEditingCustomWorkspaceView();
+      return;
+    }
+
+    if (!trimmedLabel) {
+      addToast({
+        type: "warning",
+        title: "Name required",
+        description: "Saved workspace views need a short label.",
+      });
+      return;
+    }
+
+    if (trimmedLabel === currentView.label) {
+      cancelEditingCustomWorkspaceView();
+      return;
+    }
+
+    const duplicateLabel = customWorkspaceViews.find(
+      (view) =>
+        view.id !== viewId && view.label.toLowerCase() === trimmedLabel.toLowerCase()
+    );
+
+    if (duplicateLabel) {
+      addToast({
+        type: "warning",
+        title: "Label already used",
+        description: "Choose a distinct label so operators can tell these views apart.",
+      });
+      return;
+    }
+
+    updateClientWorkspaceViewLabel(viewId, trimmedLabel);
+    addToast({
+      type: "success",
+      title: "Saved view renamed",
+      description: `${currentView.label} is now ${trimmedLabel}.`,
+    });
+    cancelEditingCustomWorkspaceView();
+  }
+
   const columns: Column<ClientOperationalRow>[] = [
     {
       key: "name",
@@ -782,6 +846,7 @@ function ClientsPageContent() {
             ) : (
               customWorkspaceViews.map((view) => {
                 const isActive = activeCustomWorkspaceView?.id === view.id;
+                const isEditing = editingViewId === view.id;
 
                 return (
                   <div
@@ -793,35 +858,84 @@ function ClientsPageContent() {
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <button
-                        type="button"
-                        onClick={() => applyCustomWorkspaceView(view.id)}
-                        className="min-w-0 flex-1 text-left"
-                      >
-                        <p className="truncate text-sm font-semibold">{view.label}</p>
-                        <p
-                          className={`mt-2 text-xs ${
-                            isActive
-                              ? "text-neutral-200 dark:text-neutral-600"
-                              : "text-neutral-500 dark:text-neutral-400"
-                          }`}
-                        >
-                          {view.health === "all" ? "All health" : view.health} · {view.queuePreset} ·{" "}
-                          {view.touchFilter === "all" ? "all touchpoints" : view.touchFilter}
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteCustomWorkspaceView(view.id, view.label)}
-                        className={`rounded-lg p-2 transition-colors ${
-                          isActive
-                            ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
-                            : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-                        }`}
-                        aria-label={`Delete ${view.label}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <div className="min-w-0 flex-1">
+                        {isEditing ? (
+                          <div className="space-y-3">
+                            <Input
+                              value={editingViewLabel}
+                              onChange={(event) => setEditingViewLabel(event.target.value)}
+                              className="h-9"
+                              autoFocus
+                            />
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={isActive ? "secondary" : "outline"}
+                                leftIcon={<Save className="h-3.5 w-3.5" />}
+                                onClick={() => renameCustomWorkspaceView(view.id)}
+                              >
+                                Save
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                leftIcon={<X className="h-3.5 w-3.5" />}
+                                onClick={cancelEditingCustomWorkspaceView}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => applyCustomWorkspaceView(view.id)}
+                            className="min-w-0 text-left"
+                          >
+                            <p className="truncate text-sm font-semibold">{view.label}</p>
+                            <p
+                              className={`mt-2 text-xs ${
+                                isActive
+                                  ? "text-neutral-200 dark:text-neutral-600"
+                                  : "text-neutral-500 dark:text-neutral-400"
+                              }`}
+                            >
+                              {view.health === "all" ? "All health" : view.health} | {view.queuePreset} |{" "}
+                              {view.touchFilter === "all" ? "all touchpoints" : view.touchFilter}
+                            </p>
+                          </button>
+                        )}
+                      </div>
+                      {!isEditing && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => startEditingCustomWorkspaceView(view.id, view.label)}
+                            className={`rounded-lg p-2 transition-colors ${
+                              isActive
+                                ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
+                                : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                            }`}
+                            aria-label={`Rename ${view.label}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteCustomWorkspaceView(view.id, view.label)}
+                            className={`rounded-lg p-2 transition-colors ${
+                              isActive
+                                ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
+                                : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                            }`}
+                            aria-label={`Delete ${view.label}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

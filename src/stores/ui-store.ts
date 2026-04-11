@@ -47,6 +47,7 @@ interface UIState {
   saveClientWorkspaceView: (
     view: Omit<SavedClientWorkspaceView, "id" | "createdAt">
   ) => SavedClientWorkspaceView;
+  updateClientWorkspaceViewLabel: (id: string, label: string) => void;
   removeClientWorkspaceView: (id: string) => void;
 
   // Toasts
@@ -106,6 +107,12 @@ export const useUIStore = create<UIState>()(
         });
         return nextView;
       },
+      updateClientWorkspaceViewLabel: (id, label) =>
+        set((state) => ({
+          savedClientWorkspaceViews: state.savedClientWorkspaceViews.map((view) =>
+            view.id === id ? { ...view, label } : view
+          ),
+        })),
       removeClientWorkspaceView: (id) =>
         set((state) => ({
           savedClientWorkspaceViews: state.savedClientWorkspaceViews.filter(
