@@ -7,6 +7,8 @@ import {
   type ClientHealthFilter,
   type ClientTouchFilter,
 } from "@/lib/operations/client-views";
+import type { ReportRange } from "@/lib/reports/analytics";
+import type { InvoiceStatus } from "@/types/database";
 
 export interface Toast {
   id: string;
@@ -23,6 +25,15 @@ export interface SavedClientWorkspaceView {
   health: ClientHealthFilter;
   queuePreset: CollectionsQueuePreset;
   touchFilter: ClientTouchFilter;
+  createdAt: string;
+}
+
+export interface SavedReportPreset {
+  id: string;
+  orgId: string;
+  label: string;
+  range: ReportRange;
+  status: InvoiceStatus | "all";
   createdAt: string;
 }
 
@@ -49,6 +60,12 @@ interface UIState {
   ) => SavedClientWorkspaceView;
   updateClientWorkspaceViewLabel: (id: string, label: string) => void;
   removeClientWorkspaceView: (id: string) => void;
+  savedReportPresets: SavedReportPreset[];
+  saveReportPreset: (
+    preset: Omit<SavedReportPreset, "id" | "createdAt">
+  ) => SavedReportPreset;
+  updateReportPresetLabel: (id: string, label: string) => void;
+  removeReportPreset: (id: string) => void;
 
   // Toasts
   toasts: Toast[];
@@ -119,6 +136,39 @@ export const useUIStore = create<UIState>()(
             (view) => view.id !== id
           ),
         })),
+      savedReportPresets: [],
+      saveReportPreset: (preset) => {
+        const nextPreset: SavedReportPreset = {
+          ...preset,
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+        };
+        set((state) => {
+          const existing = state.savedReportPresets.filter(
+            (entry) => entry.orgId === preset.orgId
+          );
+          const retained = state.savedReportPresets.filter(
+            (entry) => entry.orgId !== preset.orgId
+          );
+
+          return {
+            savedReportPresets: [...retained, ...existing.slice(-5), nextPreset],
+          };
+        });
+        return nextPreset;
+      },
+      updateReportPresetLabel: (id, label) =>
+        set((state) => ({
+          savedReportPresets: state.savedReportPresets.map((preset) =>
+            preset.id === id ? { ...preset, label } : preset
+          ),
+        })),
+      removeReportPreset: (id) =>
+        set((state) => ({
+          savedReportPresets: state.savedReportPresets.filter(
+            (preset) => preset.id !== id
+          ),
+        })),
 
       // Toasts
       toasts: [],
@@ -148,6 +198,7 @@ export const useUIStore = create<UIState>()(
         collectionsPreset: state.collectionsPreset,
         clientOpsView: state.clientOpsView,
         savedClientWorkspaceViews: state.savedClientWorkspaceViews,
+        savedReportPresets: state.savedReportPresets,
       }),
     }
   )
