@@ -4,6 +4,7 @@ import {
   Activity,
   ArrowRight,
   BarChart3,
+  Bookmark,
   CreditCard,
   FileText,
   LayoutDashboard,
@@ -20,7 +21,10 @@ import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useStripePortal } from "@/hooks/use-stripe";
-import { buildClientOpsViewHref } from "@/lib/operations/client-views";
+import {
+  buildClientOpsViewHref,
+  findMatchingClientOpsView,
+} from "@/lib/operations/client-views";
 import { useUIStore } from "@/stores/ui-store";
 import { cn } from "@/lib/utils/cn";
 
@@ -55,11 +59,22 @@ export function WorkspaceQuickActions() {
   const { can, hasRole, role } = usePermissions();
   const setCollectionsPreset = useUIStore((s) => s.setCollectionsPreset);
   const setClientOpsView = useUIStore((s) => s.setClientOpsView);
+  const savedClientWorkspaceViews = useUIStore((s) => s.savedClientWorkspaceViews);
   const { openPortal, isLoading: portalLoading } = useStripePortal();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [runningId, setRunningId] = useState<string | null>(null);
+
+  const workspaceSavedViews = useMemo(
+    () =>
+      savedClientWorkspaceViews
+        .filter((view) => view.orgId === currentOrg?.id)
+        .slice()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, 4),
+    [currentOrg?.id, savedClientWorkspaceViews]
+  );
 
   const commands = useMemo<CommandItem[]>(() => {
     const navigation = [
@@ -214,7 +229,45 @@ export function WorkspaceQuickActions() {
       },
     ];
 
-    return [...navigation, ...workflows].filter((item) => item.visible);
+    const savedViews = workspaceSavedViews.map((view) => ({
+      id: `saved-view-${view.id}`,
+      title: view.label,
+      description: `Open ${view.health === "all" ? "all-health" : view.health} accounts in the ${view.queuePreset} queue with ${view.touchFilter === "all" ? "all touchpoints" : `${view.touchFilter} touchpoint`} coverage.`,
+      section: "Saved views",
+      icon: Bookmark,
+      keywords: [
+        "saved",
+        "view",
+        "client",
+        "collections",
+        view.label,
+        view.health,
+        view.queuePreset,
+        view.touchFilter,
+      ],
+      visible: true,
+      run: () => {
+        const matchedView = findMatchingClientOpsView(view.health, view.queuePreset);
+        const params = new URLSearchParams({
+          health: view.health,
+          queue: view.queuePreset,
+        });
+
+        if (view.touchFilter !== "all") {
+          params.set("touch", view.touchFilter);
+        }
+
+        if (matchedView) {
+          params.set("view", matchedView.id);
+          setClientOpsView(matchedView.id);
+        }
+
+        setCollectionsPreset(view.queuePreset);
+        router.push(`/dashboard/clients?${params.toString()}`);
+      },
+    }));
+
+    return [...navigation, ...workflows, ...savedViews].filter((item) => item.visible);
   }, [
     can,
     currentOrg,
@@ -223,6 +276,7 @@ export function WorkspaceQuickActions() {
     router,
     setClientOpsView,
     setCollectionsPreset,
+    workspaceSavedViews,
   ]);
 
   const filteredCommands = useMemo(() => {
