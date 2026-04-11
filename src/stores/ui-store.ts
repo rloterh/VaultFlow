@@ -37,6 +37,14 @@ export interface SavedReportPreset {
   createdAt: string;
 }
 
+export interface SavedBillingRecoveryPreset {
+  id: string;
+  orgId: string;
+  label: string;
+  preset: import("@/lib/invoices/payments").PaymentRecoveryPreset;
+  createdAt: string;
+}
+
 interface UIState {
   // Sidebar
   sidebarOpen: boolean;
@@ -66,6 +74,12 @@ interface UIState {
   ) => SavedReportPreset;
   updateReportPresetLabel: (id: string, label: string) => void;
   removeReportPreset: (id: string) => void;
+  savedBillingRecoveryPresets: SavedBillingRecoveryPreset[];
+  saveBillingRecoveryPreset: (
+    preset: Omit<SavedBillingRecoveryPreset, "id" | "createdAt">
+  ) => SavedBillingRecoveryPreset;
+  updateBillingRecoveryPresetLabel: (id: string, label: string) => void;
+  removeBillingRecoveryPreset: (id: string) => void;
 
   // Toasts
   toasts: Toast[];
@@ -169,6 +183,43 @@ export const useUIStore = create<UIState>()(
             (preset) => preset.id !== id
           ),
         })),
+      savedBillingRecoveryPresets: [],
+      saveBillingRecoveryPreset: (preset) => {
+        const nextPreset: SavedBillingRecoveryPreset = {
+          ...preset,
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+        };
+        set((state) => {
+          const existing = state.savedBillingRecoveryPresets.filter(
+            (entry) => entry.orgId === preset.orgId
+          );
+          const retained = state.savedBillingRecoveryPresets.filter(
+            (entry) => entry.orgId !== preset.orgId
+          );
+
+          return {
+            savedBillingRecoveryPresets: [
+              ...retained,
+              ...existing.slice(-5),
+              nextPreset,
+            ],
+          };
+        });
+        return nextPreset;
+      },
+      updateBillingRecoveryPresetLabel: (id, label) =>
+        set((state) => ({
+          savedBillingRecoveryPresets: state.savedBillingRecoveryPresets.map(
+            (preset) => (preset.id === id ? { ...preset, label } : preset)
+          ),
+        })),
+      removeBillingRecoveryPreset: (id) =>
+        set((state) => ({
+          savedBillingRecoveryPresets: state.savedBillingRecoveryPresets.filter(
+            (preset) => preset.id !== id
+          ),
+        })),
 
       // Toasts
       toasts: [],
@@ -199,6 +250,7 @@ export const useUIStore = create<UIState>()(
         clientOpsView: state.clientOpsView,
         savedClientWorkspaceViews: state.savedClientWorkspaceViews,
         savedReportPresets: state.savedReportPresets,
+        savedBillingRecoveryPresets: state.savedBillingRecoveryPresets,
       }),
     }
   )

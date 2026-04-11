@@ -36,6 +36,8 @@ export interface PaymentRecoveryQueueItem {
   isPartial: boolean;
 }
 
+export type PaymentRecoveryPreset = "priority" | "overdue" | "partial" | "open";
+
 export function getInvoicePaymentSummary(
   invoice: Pick<
     Invoice,
@@ -227,4 +229,21 @@ export function getPaymentRecoveryQueue(
     .filter((invoice) => invoice.outstandingAmount > 0)
     .sort((a, b) => b.priorityScore - a.priorityScore)
     .slice(0, limit);
+}
+
+export function filterPaymentRecoveryQueue(
+  items: PaymentRecoveryQueueItem[],
+  preset: PaymentRecoveryPreset
+) {
+  switch (preset) {
+    case "overdue":
+      return items.filter((item) => item.status === "overdue");
+    case "partial":
+      return items.filter((item) => item.isPartial);
+    case "open":
+      return items.filter((item) => item.status !== "overdue" && !item.isPartial);
+    case "priority":
+    default:
+      return items;
+  }
 }
