@@ -13,10 +13,12 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   Building2,
+  BookmarkPlus,
   Clock3,
   Mail,
   MapPin,
   Plus,
+  Trash2,
   Users,
 } from "lucide-react";
 import { ClientRowActions } from "@/components/dashboard/client-row-actions";
@@ -91,10 +93,14 @@ function ClientsPageContent() {
   const { can, role } = usePermissions();
   const addToast = useUIStore((s) => s.addToast);
   const storedClientOpsView = useUIStore((s) => s.clientOpsView);
+  const savedClientWorkspaceViews = useUIStore((s) => s.savedClientWorkspaceViews);
+  const saveClientWorkspaceView = useUIStore((s) => s.saveClientWorkspaceView);
+  const removeClientWorkspaceView = useUIStore((s) => s.removeClientWorkspaceView);
   const [clients, setClients] = useState<ClientOperationalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savedViewName, setSavedViewName] = useState("");
   const [clientForm, setClientForm] = useState({
     name: "",
     email: "",
@@ -374,6 +380,21 @@ function ClientsPageContent() {
   }
 
   const activeSavedView = findMatchingClientOpsView(healthFilter, queuePreset);
+  const customWorkspaceViews = useMemo(
+    () =>
+      savedClientWorkspaceViews.filter((view) => view.orgId === currentOrg?.id),
+    [currentOrg?.id, savedClientWorkspaceViews]
+  );
+  const activeCustomWorkspaceView = useMemo(
+    () =>
+      customWorkspaceViews.find(
+        (view) =>
+          view.health === healthFilter &&
+          view.queuePreset === queuePreset &&
+          view.touchFilter === touchFilter
+      ) ?? null,
+    [customWorkspaceViews, healthFilter, queuePreset, touchFilter]
+  );
   const savedViewCounts: Record<string, number> = {
     "collections-focus": metrics.needsTouch,
     "at-risk-accounts": metrics.atRisk,
@@ -404,6 +425,90 @@ function ClientsPageContent() {
   };
   const matchingInvoicesHref = `/dashboard/invoices?queue=${queuePreset}`;
   const matchingReportsHref = `/dashboard/reports?queue=${queuePreset}`;
+
+  function applyCustomWorkspaceView(viewId: string) {
+    const view = customWorkspaceViews.find((entry) => entry.id === viewId);
+    if (!view) {
+      return;
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("health", view.health);
+    params.set("queue", view.queuePreset);
+    if (view.touchFilter === "all") {
+      params.delete("touch");
+    } else {
+      params.set("touch", view.touchFilter);
+    }
+
+    const matchedView = findMatchingClientOpsView(view.health, view.queuePreset);
+    if (matchedView) {
+      params.set("view", matchedView.id);
+      setClientOpsView(matchedView.id);
+      setQueuePreset(matchedView.queuePreset);
+    } else {
+      params.delete("view");
+      setQueuePreset(view.queuePreset);
+    }
+
+    router.replace(`/dashboard/clients?${params.toString()}`);
+  }
+
+  function saveCurrentWorkspaceView() {
+    if (!currentOrg) {
+      return;
+    }
+
+    const trimmedLabel = savedViewName.trim();
+    if (!trimmedLabel) {
+      addToast({
+        type: "warning",
+        title: "Name this saved view",
+        description: "Add a short label so operators can reopen it later.",
+      });
+      return;
+    }
+
+    const duplicate = customWorkspaceViews.find(
+      (view) =>
+        view.health === healthFilter &&
+        view.queuePreset === queuePreset &&
+        view.touchFilter === touchFilter &&
+        view.label.toLowerCase() === trimmedLabel.toLowerCase()
+    );
+
+    if (duplicate) {
+      addToast({
+        type: "info",
+        title: "Saved view already exists",
+        description: "This workspace slice is already available in your saved views.",
+      });
+      return;
+    }
+
+    saveClientWorkspaceView({
+      orgId: currentOrg.id,
+      label: trimmedLabel,
+      health: healthFilter,
+      queuePreset,
+      touchFilter,
+    });
+    setSavedViewName("");
+    addToast({
+      type: "success",
+      title: "Workspace view saved",
+      description: `${trimmedLabel} is now pinned for this workspace.`,
+    });
+  }
+
+  function deleteCustomWorkspaceView(viewId: string, label: string) {
+    removeClientWorkspaceView(viewId);
+    addToast({
+      type: "info",
+      title: "Saved view removed",
+      description: `${label} has been cleared from this workspace.`,
+    });
+  }
 
   const columns: Column<ClientOperationalRow>[] = [
     {
@@ -595,7 +700,9 @@ function ClientsPageContent() {
           <div className="rounded-xl border border-dashed border-neutral-200 px-4 py-3 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
             Current focus:{" "}
             <span className="font-medium text-neutral-900 dark:text-white">
-              {activeSavedView?.label ?? "Custom workspace view"}
+              {activeCustomWorkspaceView?.label ??
+                activeSavedView?.label ??
+                "Custom workspace view"}
             </span>
           </div>
         </div>
@@ -637,6 +744,90 @@ function ClientsPageContent() {
               </div>
             </button>
           ))}
+        </div>
+
+        <div className="mt-5 rounded-2xl border border-neutral-200/70 bg-neutral-50/70 p-4 dark:border-neutral-800 dark:bg-neutral-900/40">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                Custom saved views
+              </p>
+              <p className="mt-1 text-sm text-neutral-500">
+                Capture the exact health, queue, and reminder posture your team revisits most.
+              </p>
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
+              <Input
+                value={savedViewName}
+                onChange={(event) => setSavedViewName(event.target.value)}
+                placeholder="Quarter-end renewals"
+                className="sm:w-64"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                leftIcon={<BookmarkPlus className="h-4 w-4" />}
+                onClick={saveCurrentWorkspaceView}
+              >
+                Save current view
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+            {customWorkspaceViews.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-neutral-200 px-4 py-5 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400 xl:col-span-3">
+                No custom views saved yet. Preserve your current operating slice once it matches a repeat workflow.
+              </div>
+            ) : (
+              customWorkspaceViews.map((view) => {
+                const isActive = activeCustomWorkspaceView?.id === view.id;
+
+                return (
+                  <div
+                    key={view.id}
+                    className={`rounded-xl border p-4 transition-colors ${
+                      isActive
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-900"
+                        : "border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950/60"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => applyCustomWorkspaceView(view.id)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <p className="truncate text-sm font-semibold">{view.label}</p>
+                        <p
+                          className={`mt-2 text-xs ${
+                            isActive
+                              ? "text-neutral-200 dark:text-neutral-600"
+                              : "text-neutral-500 dark:text-neutral-400"
+                          }`}
+                        >
+                          {view.health === "all" ? "All health" : view.health} · {view.queuePreset} ·{" "}
+                          {view.touchFilter === "all" ? "all touchpoints" : view.touchFilter}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteCustomWorkspaceView(view.id, view.label)}
+                        className={`rounded-lg p-2 transition-colors ${
+                          isActive
+                            ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
+                            : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                        }`}
+                        aria-label={`Delete ${view.label}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
 
         <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

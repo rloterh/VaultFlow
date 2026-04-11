@@ -4,6 +4,8 @@ import type { CollectionsQueuePreset } from "@/lib/collections/queue";
 import {
   DEFAULT_CLIENT_OPS_VIEW,
   type ClientOpsViewId,
+  type ClientHealthFilter,
+  type ClientTouchFilter,
 } from "@/lib/operations/client-views";
 
 export interface Toast {
@@ -12,6 +14,16 @@ export interface Toast {
   title: string;
   description?: string;
   duration?: number;
+}
+
+export interface SavedClientWorkspaceView {
+  id: string;
+  orgId: string;
+  label: string;
+  health: ClientHealthFilter;
+  queuePreset: CollectionsQueuePreset;
+  touchFilter: ClientTouchFilter;
+  createdAt: string;
 }
 
 interface UIState {
@@ -31,6 +43,11 @@ interface UIState {
   setCollectionsPreset: (preset: CollectionsQueuePreset) => void;
   clientOpsView: ClientOpsViewId;
   setClientOpsView: (view: ClientOpsViewId) => void;
+  savedClientWorkspaceViews: SavedClientWorkspaceView[];
+  saveClientWorkspaceView: (
+    view: Omit<SavedClientWorkspaceView, "id" | "createdAt">
+  ) => SavedClientWorkspaceView;
+  removeClientWorkspaceView: (id: string) => void;
 
   // Toasts
   toasts: Toast[];
@@ -64,6 +81,37 @@ export const useUIStore = create<UIState>()(
       setCollectionsPreset: (preset) => set({ collectionsPreset: preset }),
       clientOpsView: DEFAULT_CLIENT_OPS_VIEW,
       setClientOpsView: (view) => set({ clientOpsView: view }),
+      savedClientWorkspaceViews: [],
+      saveClientWorkspaceView: (view) => {
+        const nextView: SavedClientWorkspaceView = {
+          ...view,
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+        };
+        set((state) => {
+          const existing = state.savedClientWorkspaceViews.filter(
+            (entry) => entry.orgId === view.orgId
+          );
+          const retained = state.savedClientWorkspaceViews.filter(
+            (entry) => entry.orgId !== view.orgId
+          );
+
+          return {
+            savedClientWorkspaceViews: [
+              ...retained,
+              ...existing.slice(-5),
+              nextView,
+            ],
+          };
+        });
+        return nextView;
+      },
+      removeClientWorkspaceView: (id) =>
+        set((state) => ({
+          savedClientWorkspaceViews: state.savedClientWorkspaceViews.filter(
+            (view) => view.id !== id
+          ),
+        })),
 
       // Toasts
       toasts: [],
@@ -92,6 +140,7 @@ export const useUIStore = create<UIState>()(
         sidebarCollapsed: state.sidebarCollapsed,
         collectionsPreset: state.collectionsPreset,
         clientOpsView: state.clientOpsView,
+        savedClientWorkspaceViews: state.savedClientWorkspaceViews,
       }),
     }
   )
