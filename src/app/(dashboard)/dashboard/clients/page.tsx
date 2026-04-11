@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
 import { recordActivity } from "@/lib/activity/log";
+import { buildClientAccountSignalsSnapshot } from "@/lib/clients/account-signals";
 import {
   buildClientFinancialSnapshot,
   buildClientCollectionsSummaryMap,
@@ -87,6 +88,34 @@ function fmtDate(value: string | null) {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function getToneBadgeVariant(tone: "default" | "success" | "warning" | "danger" | "info") {
+  if (tone === "success") return "success";
+  if (tone === "warning") return "warning";
+  if (tone === "danger") return "danger";
+  if (tone === "info") return "info";
+  return "outline";
+}
+
+function getToneShellClasses(tone: "default" | "success" | "warning" | "danger" | "info") {
+  if (tone === "success") {
+    return "border-emerald-200/70 bg-emerald-50/70 dark:border-emerald-900/40 dark:bg-emerald-950/30";
+  }
+
+  if (tone === "warning") {
+    return "border-amber-200/70 bg-amber-50/70 dark:border-amber-900/40 dark:bg-amber-950/25";
+  }
+
+  if (tone === "danger") {
+    return "border-red-200/70 bg-red-50/70 dark:border-red-900/40 dark:bg-red-950/25";
+  }
+
+  if (tone === "info") {
+    return "border-blue-200/70 bg-blue-50/70 dark:border-blue-900/40 dark:bg-blue-950/25";
+  }
+
+  return "border-neutral-200/70 bg-neutral-50/80 dark:border-neutral-800 dark:bg-neutral-900/70";
 }
 
 function ClientsPageContent() {
@@ -493,6 +522,15 @@ function ClientsPageContent() {
       queuePreset,
       touchFilter,
     ]
+  );
+  const clientSignalsSnapshot = useMemo(
+    () =>
+      buildClientAccountSignalsSnapshot({
+        accounts: filteredClients,
+        role,
+        scopeLabel: isVendorRole(role) ? "assigned portfolio" : "client workspace",
+      }),
+    [filteredClients, role]
   );
 
   function applyCustomWorkspaceView(viewId: string) {
@@ -1054,9 +1092,9 @@ function ClientsPageContent() {
             ))}
           </div>
 
-          <div className="mt-5 rounded-xl border border-dashed border-neutral-200 px-4 py-4 dark:border-neutral-800">
-            <p className="text-sm font-medium text-neutral-900 dark:text-white">
-              Recommended next moves
+        <div className="mt-5 rounded-xl border border-dashed border-neutral-200 px-4 py-4 dark:border-neutral-800">
+          <p className="text-sm font-medium text-neutral-900 dark:text-white">
+            Recommended next moves
             </p>
             <div className="mt-3 space-y-2">
               {workspaceBriefing.recommendations.map((entry) => (
@@ -1068,6 +1106,89 @@ function ClientsPageContent() {
                 </p>
               ))}
             </div>
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-2xl border border-neutral-200/70 bg-gradient-to-br from-white via-neutral-50/80 to-neutral-100/70 p-5 dark:border-neutral-800 dark:from-neutral-950/80 dark:via-neutral-950/60 dark:to-neutral-900/60">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={getToneBadgeVariant(clientSignalsSnapshot.tone)}>
+                  Enterprise account signals
+                </Badge>
+                <Badge variant="outline">
+                  {isVendorRole(role) ? "Assigned portfolio" : "CSM handoff hooks"}
+                </Badge>
+              </div>
+              <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                {clientSignalsSnapshot.title}
+              </p>
+              <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                {clientSignalsSnapshot.detail}
+              </p>
+            </div>
+            <div className="rounded-xl border border-dashed border-neutral-200/80 px-4 py-3 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+              {role === "finance_manager"
+                ? "Finance can route directly from account signals into billing recovery while keeping client context visible."
+                : role === "vendor"
+                  ? "Vendor seats stay scoped to assigned accounts while internal billing and admin actions remain separate."
+                  : role === "viewer"
+                    ? "Read-only roles can validate posture here, then route action to finance-capable operators."
+                    : "Account signals keep the next owner visible before teams fan back out into invoices, reports, or billing."}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 xl:grid-cols-3">
+            {clientSignalsSnapshot.signals.map((signal) => (
+              <div
+                key={signal.id}
+                className={`rounded-2xl border p-4 ${getToneShellClasses(signal.tone)}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <Badge variant={getToneBadgeVariant(signal.tone)}>
+                      {signal.title}
+                    </Badge>
+                    <p className="mt-3 text-sm font-semibold text-neutral-900 dark:text-white">
+                      {signal.clientName}
+                    </p>
+                    <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+                      {signal.company ?? signal.healthLabel}
+                    </p>
+                  </div>
+                  <Badge variant="outline">{signal.healthLabel}</Badge>
+                </div>
+
+                <p className="mt-4 text-sm leading-6 text-neutral-600 dark:text-neutral-300">
+                  {signal.detail}
+                </p>
+
+                <div className="mt-4 rounded-xl border border-white/70 bg-white/70 p-3 dark:border-neutral-900/60 dark:bg-neutral-950/60">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                    Handoff continuity
+                  </p>
+                  <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                    {signal.handoffDetail}
+                  </p>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Link href={signal.actionHref}>
+                    <Button
+                      size="sm"
+                      variant={signal.tone === "danger" ? "danger" : "outline"}
+                    >
+                      {signal.actionLabel}
+                    </Button>
+                  </Link>
+                  <Link href={signal.routeHref}>
+                    <Button size="sm" variant="ghost">
+                      {signal.routeLabel}
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
