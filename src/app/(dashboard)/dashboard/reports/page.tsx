@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
@@ -17,11 +18,16 @@ import {
   ArrowUpRight,
   BarChart3,
   BellRing,
+  BookmarkPlus,
   DollarSign,
   Download,
   Filter,
+  Pencil,
+  Save,
+  Trash2,
   TrendingUp,
   Users,
+  X,
 } from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { RevenueChart, StatusChart } from "@/components/charts";
@@ -33,6 +39,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
 import { Badge, Skeleton } from "@/components/ui/badge";
 import { MetricCard } from "@/components/ui/metric-card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -59,6 +66,7 @@ import {
   type ReportInsight,
   type ReportRange,
 } from "@/lib/reports/analytics";
+import { buildReportWorkspaceBriefing } from "@/lib/reports/briefing";
 import { exportInvoicesReport } from "@/lib/reports/export";
 import {
   buildClientOpsViewHref,
@@ -94,6 +102,66 @@ const STATUS_OPTIONS: Array<{ value: InvoiceStatus | "all"; label: string }> = [
   { value: "cancelled", label: "Cancelled" },
 ];
 const EMPTY_REPORT = buildReportSnapshot([], [], { range: "90d", status: "all" });
+
+function getReportRoleDescription(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "finance_manager") {
+    return "A finance-ready view of collections pressure, recovery posture, and invoice throughput across the workspace.";
+  }
+
+  if (role === "viewer") {
+    return "A read-only oversight view of collections, invoice throughput, and account exposure across the workspace.";
+  }
+
+  if (isVendorRole(role)) {
+    return "A scoped reporting view of only the clients and invoices assigned to your vendor seat.";
+  }
+
+  return "A live operational view of collections, invoice throughput, and account exposure across your workspace.";
+}
+
+function getReportGuardrailCopy(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "manager") {
+    return "Export is reserved for finance managers, admins, and owners.";
+  }
+
+  if (role === "viewer") {
+    return "You can review the workspace analytics in read-only mode and escalate anything that needs export or finance action.";
+  }
+
+  if (isVendorRole(role)) {
+    return "Your vendor seat can review scoped analytics, but export stays with internal finance-capable roles.";
+  }
+
+  return "Export is unavailable for your current workspace role.";
+}
+
+function getEmptyReportDescription(role: ReturnType<typeof usePermissions>["role"]) {
+  if (isVendorRole(role)) {
+    return "Your assigned portfolio does not currently have invoices in this filter slice. Reset filters or wait for new scoped activity.";
+  }
+
+  if (role === "viewer") {
+    return "Adjust the reporting window or choose a different status to bring more oversight data into view.";
+  }
+
+  if (role === "finance_manager") {
+    return "Adjust the reporting window or choose a different status to bring recovery and billing data back into the active slice.";
+  }
+
+  return "Adjust the reporting window or choose a different status to bring records into view.";
+}
+
+function getMatchingClientViewLabel(role: ReturnType<typeof usePermissions>["role"]) {
+  if (isVendorRole(role)) {
+    return "Open matching assigned client view";
+  }
+
+  if (role === "viewer") {
+    return "Open matching oversight client view";
+  }
+
+  return "Open matching client view";
+}
 
 function fmt(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -203,9 +271,16 @@ function ReportsContent() {
   const { user } = useAuth();
   const { currentOrg } = useOrgStore();
   const { can, role } = usePermissions();
+  const searchParams = useSearchParams();
   const addToast = useUIStore((state) => state.addToast);
   const queuePreset = useUIStore((state) => state.collectionsPreset);
   const setQueuePreset = useUIStore((state) => state.setCollectionsPreset);
+  const savedReportPresets = useUIStore((state) => state.savedReportPresets);
+  const saveReportPreset = useUIStore((state) => state.saveReportPreset);
+  const updateReportPresetLabel = useUIStore(
+    (state) => state.updateReportPresetLabel
+  );
+  const removeReportPreset = useUIStore((state) => state.removeReportPreset);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -219,6 +294,9 @@ function ReportsContent() {
     range: "90d",
     status: "all",
   });
+  const [presetName, setPresetName] = useState("");
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [editingPresetLabel, setEditingPresetLabel] = useState("");
 
   const fetchReports = useCallback(async () => {
     if (!currentOrg) return;
@@ -317,6 +395,38 @@ function ReportsContent() {
     fetchReports();
   }, [fetchReports]);
 
+  useEffect(() => {
+    const range = searchParams.get("range");
+    const status = searchParams.get("status");
+
+    const nextRange = RANGE_OPTIONS.some((option) => option.value === range)
+      ? (range as ReportRange)
+      : null;
+    const nextStatus = STATUS_OPTIONS.some((option) => option.value === status)
+      ? (status as ReportFilters["status"])
+      : null;
+
+    if (!nextRange && !nextStatus) {
+      return;
+    }
+
+    setFilters((current) => {
+      const resolved = {
+        range: nextRange ?? current.range,
+        status: nextStatus ?? current.status,
+      };
+
+      if (
+        resolved.range === current.range &&
+        resolved.status === current.status
+      ) {
+        return current;
+      }
+
+      return resolved;
+    });
+  }, [searchParams]);
+
   useInvoiceRealtime(currentOrg?.id, fetchReports);
 
   useEffect(() => {
@@ -410,6 +520,14 @@ function ReportsContent() {
     invoices.length === 0 && clients.length === 0
       ? EMPTY_REPORT
       : buildReportSnapshot(invoices, clients, filters);
+  const customReportPresets = savedReportPresets.filter(
+    (preset) => preset.orgId === currentOrg?.id
+  );
+  const activeReportPreset =
+    customReportPresets.find(
+      (preset) =>
+        preset.range === filters.range && preset.status === filters.status
+    ) ?? null;
   const summary = report.summary;
   const reminderLookup = new Map<string, ReminderActivityEntry>();
   const collectionsQueue = buildCollectionsQueue(report.invoices, reminders);
@@ -424,12 +542,141 @@ function ReportsContent() {
     : can("invoices:update")
       ? "record-payment"
       : "history";
+  const reportBriefing = buildReportWorkspaceBriefing({
+    label: activeReportPreset?.label ?? "Current report view",
+    range: filters.range,
+    status: filters.status,
+    summary,
+  });
 
   reminders.forEach((entry) => {
     if (!reminderLookup.has(entry.entity_id)) {
       reminderLookup.set(entry.entity_id, entry);
     }
   });
+
+  function applyReportPreset(id: string) {
+    const preset = customReportPresets.find((entry) => entry.id === id);
+    if (!preset) {
+      return;
+    }
+
+    setFilters({
+      range: preset.range,
+      status: preset.status,
+    });
+  }
+
+  function saveCurrentReportPreset() {
+    if (!currentOrg) {
+      return;
+    }
+
+    const trimmedLabel = presetName.trim();
+    if (!trimmedLabel) {
+      addToast({
+        type: "warning",
+        title: "Name this report preset",
+        description: "Add a short label so teams can reopen this analytics view later.",
+      });
+      return;
+    }
+
+    const duplicate = customReportPresets.find(
+      (preset) =>
+        preset.range === filters.range &&
+        preset.status === filters.status &&
+        preset.label.toLowerCase() === trimmedLabel.toLowerCase()
+    );
+
+    if (duplicate) {
+      addToast({
+        type: "info",
+        title: "Report preset already exists",
+        description: "This reporting slice is already saved for the current workspace.",
+      });
+      return;
+    }
+
+    saveReportPreset({
+      orgId: currentOrg.id,
+      label: trimmedLabel,
+      range: filters.range,
+      status: filters.status,
+    });
+    setPresetName("");
+    addToast({
+      type: "success",
+      title: "Report preset saved",
+      description: `${trimmedLabel} is now available in the reporting workspace.`,
+    });
+  }
+
+  function startEditingPreset(id: string, label: string) {
+    setEditingPresetId(id);
+    setEditingPresetLabel(label);
+  }
+
+  function cancelEditingPreset() {
+    setEditingPresetId(null);
+    setEditingPresetLabel("");
+  }
+
+  function renameReportPreset(id: string) {
+    const trimmedLabel = editingPresetLabel.trim();
+    const currentPreset = customReportPresets.find((preset) => preset.id === id);
+
+    if (!currentPreset) {
+      cancelEditingPreset();
+      return;
+    }
+
+    if (!trimmedLabel) {
+      addToast({
+        type: "warning",
+        title: "Name required",
+        description: "Saved report presets need a short label.",
+      });
+      return;
+    }
+
+    if (trimmedLabel === currentPreset.label) {
+      cancelEditingPreset();
+      return;
+    }
+
+    const duplicateLabel = customReportPresets.find(
+      (preset) =>
+        preset.id !== id &&
+        preset.label.toLowerCase() === trimmedLabel.toLowerCase()
+    );
+
+    if (duplicateLabel) {
+      addToast({
+        type: "warning",
+        title: "Label already used",
+        description: "Choose a distinct report preset label for your operators.",
+      });
+      return;
+    }
+
+    updateReportPresetLabel(id, trimmedLabel);
+    addToast({
+      type: "success",
+      title: "Report preset renamed",
+      description: `${currentPreset.label} is now ${trimmedLabel}.`,
+    });
+    cancelEditingPreset();
+  }
+
+  function deleteReportPreset(id: string, label: string) {
+    removeReportPreset(id);
+    addToast({
+      type: "info",
+      title: "Report preset removed",
+      description: `${label} has been removed from this workspace.`,
+    });
+  }
 
   return (
     <motion.div
@@ -444,14 +691,19 @@ function ReportsContent() {
             Reports
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            {role === "finance_manager"
-              ? "A finance-ready view of collections pressure, recovery posture, and invoice throughput across the workspace."
-              : role === "viewer"
-                ? "A read-only oversight view of collections, invoice throughput, and account exposure across the workspace."
-                : isVendorRole(role)
-                  ? "A scoped reporting view of only the clients and invoices assigned to your vendor seat."
-                  : "A live operational view of collections, invoice throughput, and account exposure across your workspace."}
+            {getReportRoleDescription(role)}
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Badge variant="outline">
+              {role === "finance_manager"
+                ? "Finance lens"
+                : role === "viewer"
+                  ? "Read-only oversight"
+                  : isVendorRole(role)
+                    ? "Assigned scope"
+                    : "Operator reporting"}
+            </Badge>
+          </div>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           {can("org:billing") && (
@@ -513,17 +765,13 @@ function ReportsContent() {
             >
               Export CSV
             </Button>
-          ) : (
-            <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-              {role === "manager"
-                ? "Export is reserved for finance managers, admins, and owners."
-                : role === "viewer"
-                  ? "You can review the workspace analytics in read-only mode."
-                  : "Export is unavailable for your current workspace role."}
-            </div>
-          )}
+            ) : (
+              <div className="rounded-lg border border-dashed border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                {getReportGuardrailCopy(role)}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
@@ -556,6 +804,190 @@ function ReportsContent() {
         />
       </div>
 
+      <Card>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant={
+                  reportBriefing.tone === "danger"
+                    ? "danger"
+                    : reportBriefing.tone === "warning"
+                      ? "warning"
+                      : reportBriefing.tone === "success"
+                        ? "success"
+                        : "info"
+                }
+              >
+                Report briefing
+              </Badge>
+              {activeReportPreset && (
+                <Badge variant="outline">{activeReportPreset.label}</Badge>
+              )}
+            </div>
+            <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+              {reportBriefing.title}
+            </p>
+            <p className="mt-2 text-sm text-neutral-500">{reportBriefing.detail}</p>
+          </div>
+          <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
+            <Input
+              value={presetName}
+              onChange={(event) => setPresetName(event.target.value)}
+              placeholder="Quarterly collections pulse"
+              className="sm:w-64"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              leftIcon={<BookmarkPlus className="h-4 w-4" />}
+              onClick={saveCurrentReportPreset}
+            >
+              Save preset
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 lg:grid-cols-3">
+          {reportBriefing.stats.map((stat) => (
+            <div
+              key={stat.label}
+              className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 p-4 dark:border-neutral-800 dark:bg-neutral-900/70"
+            >
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                {stat.label}
+              </p>
+              <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+                {stat.value}
+              </p>
+              <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                {stat.detail}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 rounded-xl border border-dashed border-neutral-200 px-4 py-4 dark:border-neutral-800">
+          <p className="text-sm font-medium text-neutral-900 dark:text-white">
+            Recommended next moves
+          </p>
+          <div className="mt-3 space-y-2">
+            {reportBriefing.recommendations.map((entry) => (
+              <p key={entry} className="text-sm text-neutral-500 dark:text-neutral-400">
+                {entry}
+              </p>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 xl:grid-cols-3">
+          {customReportPresets.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-neutral-200 px-4 py-5 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400 xl:col-span-3">
+              No saved report presets yet. Capture the reporting slices your team revisits most often.
+            </div>
+          ) : (
+            customReportPresets.map((preset) => {
+              const isActive = activeReportPreset?.id === preset.id;
+              const isEditing = editingPresetId === preset.id;
+
+              return (
+                <div
+                  key={preset.id}
+                  className={`rounded-xl border p-4 transition-colors ${
+                    isActive
+                      ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-900"
+                      : "border-neutral-200/70 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      {isEditing ? (
+                        <div className="space-y-3">
+                          <Input
+                            value={editingPresetLabel}
+                            onChange={(event) => setEditingPresetLabel(event.target.value)}
+                            className="h-9"
+                            autoFocus
+                          />
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={isActive ? "secondary" : "outline"}
+                              leftIcon={<Save className="h-3.5 w-3.5" />}
+                              onClick={() => renameReportPreset(preset.id)}
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              leftIcon={<X className="h-3.5 w-3.5" />}
+                              onClick={cancelEditingPreset}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => applyReportPreset(preset.id)}
+                          className="min-w-0 text-left"
+                        >
+                          <p className="truncate text-sm font-semibold">{preset.label}</p>
+                          <p
+                            className={`mt-2 text-xs ${
+                              isActive
+                                ? "text-neutral-200 dark:text-neutral-600"
+                                : "text-neutral-500 dark:text-neutral-400"
+                            }`}
+                          >
+                            {RANGE_OPTIONS.find((option) => option.value === preset.range)?.label} |{" "}
+                            {preset.status === "all"
+                              ? "All statuses"
+                              : formatInvoiceStatus(preset.status)}
+                          </p>
+                        </button>
+                      )}
+                    </div>
+                    {!isEditing && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => startEditingPreset(preset.id, preset.label)}
+                          className={`rounded-lg p-2 transition-colors ${
+                            isActive
+                              ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
+                              : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                          }`}
+                          aria-label={`Rename ${preset.label}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteReportPreset(preset.id, preset.label)}
+                          className={`rounded-lg p-2 transition-colors ${
+                            isActive
+                              ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
+                              : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                          }`}
+                          aria-label={`Delete ${preset.label}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </Card>
+
       <div className="grid gap-4 lg:grid-cols-3">
         {report.insights.map((insight) => (
           <InsightCard key={insight.id} insight={insight} />
@@ -563,14 +995,14 @@ function ReportsContent() {
       </div>
 
       {report.invoices.length === 0 ? (
-        <Card>
-          <EmptyState
-            title="No invoices match these filters"
-            description="Adjust the reporting window or choose a different status to bring records into view."
-            actionLabel="Reset filters"
-            onAction={() => setFilters({ range: "90d", status: "all" })}
-          />
-        </Card>
+          <Card>
+            <EmptyState
+              title="No invoices match these filters"
+              description={getEmptyReportDescription(role)}
+              actionLabel="Reset filters"
+              onAction={() => setFilters({ range: "90d", status: "all" })}
+            />
+          </Card>
       ) : (
         <>
           <Card>
@@ -698,7 +1130,7 @@ function ReportsContent() {
                   href={matchingClientViewHref}
                   className="inline-flex text-sm font-medium text-neutral-900 dark:text-white"
                 >
-                  Open matching client view
+                  {getMatchingClientViewLabel(role)}
                 </Link>
                 {visibleQueue.length === 0 ? (
                   <p className="py-6 text-center text-sm text-neutral-400">
@@ -758,7 +1190,7 @@ function ReportsContent() {
                               ? `Owned by ${accountabilityByInvoiceId.get(item.invoice.id)?.ownerName}`
                               : "No workflow owner recorded yet"}
                             {accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt
-                              ? ` · Last touch ${formatRelativeTime(accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt ?? "")}`
+                              ? ` | Last touch ${formatRelativeTime(accountabilityByInvoiceId.get(item.invoice.id)?.lastTouchedAt ?? "")}`
                               : ""}
                           </p>
                         </div>

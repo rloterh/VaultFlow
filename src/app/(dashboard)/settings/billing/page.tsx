@@ -2,32 +2,45 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
+  BookmarkPlus,
   CalendarClock,
   Check,
   CreditCard,
   ExternalLink,
+  Pencil,
   Receipt,
+  Save,
   ShieldCheck,
   Sparkles,
+  Trash2,
   TrendingUp,
   Wallet,
+  X,
 } from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { Badge, Skeleton } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { usePermissions } from "@/hooks/use-permissions";
+import { buildBillingRecoveryBriefing } from "@/lib/billing/recovery-briefing";
 import { useStripeCheckout, useStripePortal } from "@/hooks/use-stripe";
 import { buildBillingWorkspaceSummary } from "@/lib/billing/intelligence";
 import { buildInvoiceIntentHref } from "@/lib/invoices/history";
-import { getPaymentRecoveryQueue } from "@/lib/invoices/payments";
+import {
+  filterPaymentRecoveryQueue,
+  getPaymentRecoveryQueue,
+  type PaymentRecoveryPreset,
+} from "@/lib/invoices/payments";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils/cn";
 import { PLANS } from "@/lib/utils/constants";
 import { useOrgStore } from "@/stores/org-store";
+import { useUIStore } from "@/stores/ui-store";
 import type { OrgPlan } from "@/types/auth";
 import type { ActivityEntry, Invoice } from "@/types/database";
 
@@ -52,6 +65,12 @@ const planFeatures: Record<OrgPlan, string[]> = {
 };
 
 const healthIcons = [ShieldCheck, CreditCard, CalendarClock, TrendingUp] as const;
+const RECOVERY_PRESETS: Array<{ value: PaymentRecoveryPreset; label: string }> = [
+  { value: "priority", label: "Priority recovery" },
+  { value: "overdue", label: "Overdue only" },
+  { value: "partial", label: "Partial collections" },
+  { value: "open", label: "Open balances" },
+];
 
 function formatUsage(count: number, limit: number) {
   if (limit < 0) {
@@ -139,8 +158,22 @@ type BillingFetchState = {
 function BillingContent() {
   const { currentOrg } = useOrgStore();
   const { can, role } = usePermissions();
+  const searchParams = useSearchParams();
   const { checkout, isLoading: checkoutLoading } = useStripeCheckout();
   const { openPortal, isLoading: portalLoading } = useStripePortal();
+  const addToast = useUIStore((state) => state.addToast);
+  const savedBillingRecoveryPresets = useUIStore(
+    (state) => state.savedBillingRecoveryPresets
+  );
+  const saveBillingRecoveryPreset = useUIStore(
+    (state) => state.saveBillingRecoveryPreset
+  );
+  const updateBillingRecoveryPresetLabel = useUIStore(
+    (state) => state.updateBillingRecoveryPresetLabel
+  );
+  const removeBillingRecoveryPreset = useUIStore(
+    (state) => state.removeBillingRecoveryPreset
+  );
   const currentPlan = (currentOrg?.plan ?? "free") as OrgPlan;
   const hasSubscription = !!currentOrg?.stripe_subscription_id;
   const [billingState, setBillingState] = useState<BillingFetchState>({
@@ -151,6 +184,11 @@ function BillingContent() {
     loading: true,
     error: null,
   });
+  const [recoveryPreset, setRecoveryPreset] =
+    useState<PaymentRecoveryPreset>("priority");
+  const [presetName, setPresetName] = useState("");
+  const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [editingPresetLabel, setEditingPresetLabel] = useState("");
 
   useEffect(() => {
     let isActive = true;
@@ -235,6 +273,17 @@ function BillingContent() {
     };
   }, [currentOrg]);
 
+  useEffect(() => {
+    const nextPreset = searchParams.get("recovery");
+    if (
+      nextPreset &&
+      RECOVERY_PRESETS.some((entry) => entry.value === nextPreset) &&
+      nextPreset !== recoveryPreset
+    ) {
+      setRecoveryPreset(nextPreset as PaymentRecoveryPreset);
+    }
+  }, [recoveryPreset, searchParams]);
+
   const invoiceLimit = PLANS[currentPlan].invoiceLimit;
   const memberLimit = PLANS[currentPlan].memberLimit;
 
@@ -262,8 +311,24 @@ function BillingContent() {
     ]
   );
   const recoveryQueue = useMemo(
-    () => getPaymentRecoveryQueue(billingState.invoices, 5),
+    () => getPaymentRecoveryQueue(billingState.invoices, 12),
     [billingState.invoices]
+  );
+  const visibleRecoveryQueue = useMemo(
+    () => filterPaymentRecoveryQueue(recoveryQueue, recoveryPreset).slice(0, 5),
+    [recoveryPreset, recoveryQueue]
+  );
+  const customRecoveryPresets = useMemo(
+    () =>
+      savedBillingRecoveryPresets.filter(
+        (preset) => preset.orgId === currentOrg?.id
+      ),
+    [currentOrg?.id, savedBillingRecoveryPresets]
+  );
+  const activeRecoveryPreset = useMemo(
+    () =>
+      customRecoveryPresets.find((preset) => preset.preset === recoveryPreset) ?? null,
+    [customRecoveryPresets, recoveryPreset]
   );
   const canManageBilling = can("org:billing");
   const canRecoverInvoices = can("invoices:update");
@@ -274,6 +339,127 @@ function BillingContent() {
       : "Review balance";
   const recoveryIntent = canRecoverInvoices ? "record-payment" : "history";
   const primaryInsight = workspaceSummary.insights[0];
+  const recoveryBriefing = useMemo(
+    () =>
+      buildBillingRecoveryBriefing({
+        label:
+          activeRecoveryPreset?.label ??
+          RECOVERY_PRESETS.find((entry) => entry.value === recoveryPreset)?.label ??
+          "Recovery workspace",
+        preset: recoveryPreset,
+        items: visibleRecoveryQueue,
+      }),
+    [activeRecoveryPreset?.label, recoveryPreset, visibleRecoveryQueue]
+  );
+
+  function saveCurrentRecoveryPreset() {
+    if (!currentOrg) {
+      return;
+    }
+
+    const trimmedLabel = presetName.trim();
+    if (!trimmedLabel) {
+      addToast({
+        type: "warning",
+        title: "Name this billing preset",
+        description: "Add a short label so finance operators can reopen it later.",
+      });
+      return;
+    }
+
+    const duplicate = customRecoveryPresets.find(
+      (preset) =>
+        preset.preset === recoveryPreset &&
+        preset.label.toLowerCase() === trimmedLabel.toLowerCase()
+    );
+
+    if (duplicate) {
+      addToast({
+        type: "info",
+        title: "Billing preset already exists",
+        description: "This recovery slice is already saved for the current workspace.",
+      });
+      return;
+    }
+
+    saveBillingRecoveryPreset({
+      orgId: currentOrg.id,
+      label: trimmedLabel,
+      preset: recoveryPreset,
+    });
+    setPresetName("");
+    addToast({
+      type: "success",
+      title: "Billing preset saved",
+      description: `${trimmedLabel} is now available in the finance workspace.`,
+    });
+  }
+
+  function startEditingPreset(id: string, label: string) {
+    setEditingPresetId(id);
+    setEditingPresetLabel(label);
+  }
+
+  function cancelEditingPreset() {
+    setEditingPresetId(null);
+    setEditingPresetLabel("");
+  }
+
+  function renameRecoveryPreset(id: string) {
+    const trimmedLabel = editingPresetLabel.trim();
+    const currentPreset = customRecoveryPresets.find((preset) => preset.id === id);
+
+    if (!currentPreset) {
+      cancelEditingPreset();
+      return;
+    }
+
+    if (!trimmedLabel) {
+      addToast({
+        type: "warning",
+        title: "Name required",
+        description: "Saved billing presets need a short label.",
+      });
+      return;
+    }
+
+    if (trimmedLabel === currentPreset.label) {
+      cancelEditingPreset();
+      return;
+    }
+
+    const duplicateLabel = customRecoveryPresets.find(
+      (preset) =>
+        preset.id !== id &&
+        preset.label.toLowerCase() === trimmedLabel.toLowerCase()
+    );
+
+    if (duplicateLabel) {
+      addToast({
+        type: "warning",
+        title: "Label already used",
+        description: "Choose a distinct billing preset label for operators.",
+      });
+      return;
+    }
+
+    updateBillingRecoveryPresetLabel(id, trimmedLabel);
+    addToast({
+      type: "success",
+      title: "Billing preset renamed",
+      description: `${currentPreset.label} is now ${trimmedLabel}.`,
+    });
+    cancelEditingPreset();
+  }
+
+  function deleteRecoveryPreset(id: string, label: string) {
+    removeBillingRecoveryPreset(id);
+    addToast({
+      type: "info",
+      title: "Billing preset removed",
+      description: `${label} has been removed from this workspace.`,
+    });
+  }
 
   return (
     <motion.div
@@ -553,9 +739,208 @@ function BillingContent() {
           </Link>
         </div>
 
-        {recoveryQueue.length > 0 ? (
+        <div className="mt-6 rounded-2xl border border-neutral-200/70 bg-neutral-50/70 p-4 dark:border-neutral-800 dark:bg-neutral-900/40">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant={
+                    recoveryBriefing.tone === "danger"
+                      ? "danger"
+                      : recoveryBriefing.tone === "warning"
+                        ? "warning"
+                        : recoveryBriefing.tone === "success"
+                          ? "success"
+                          : "info"
+                  }
+                >
+                  Recovery briefing
+                </Badge>
+                <Badge variant="outline">
+                  {activeRecoveryPreset?.label ??
+                    RECOVERY_PRESETS.find((entry) => entry.value === recoveryPreset)?.label}
+                </Badge>
+              </div>
+              <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                {recoveryBriefing.title}
+              </p>
+              <p className="mt-2 text-sm text-neutral-500">
+                {recoveryBriefing.detail}
+              </p>
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
+              <Input
+                value={presetName}
+                onChange={(event) => setPresetName(event.target.value)}
+                placeholder="Collections handoff"
+                className="sm:w-64"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                leftIcon={<BookmarkPlus className="h-4 w-4" />}
+                onClick={saveCurrentRecoveryPreset}
+              >
+                Save preset
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {RECOVERY_PRESETS.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                onClick={() => setRecoveryPreset(preset.value)}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  recoveryPreset === preset.value
+                    ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900"
+                    : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                }`}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+            {recoveryBriefing.stats.map((stat) => (
+              <div
+                key={stat.label}
+                className="rounded-xl border border-neutral-200/70 bg-white/80 p-4 dark:border-neutral-800 dark:bg-neutral-950/40"
+              >
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                  {stat.label}
+                </p>
+                <p className="mt-3 text-2xl font-semibold text-neutral-900 dark:text-white">
+                  {stat.value}
+                </p>
+                <p className="mt-2 text-sm text-neutral-500">{stat.detail}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 rounded-xl border border-dashed border-neutral-200 px-4 py-4 dark:border-neutral-800">
+            <p className="text-sm font-medium text-neutral-900 dark:text-white">
+              Finance next moves
+            </p>
+            <div className="mt-3 space-y-2">
+              {recoveryBriefing.recommendations.map((entry) => (
+                <p key={entry} className="text-sm text-neutral-500">
+                  {entry}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 xl:grid-cols-3">
+            {customRecoveryPresets.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-neutral-200 px-4 py-5 text-sm text-neutral-500 dark:border-neutral-800 xl:col-span-3">
+                No saved billing presets yet. Capture the recovery slices your finance team reopens most often.
+              </div>
+            ) : (
+              customRecoveryPresets.map((preset) => {
+                const isActive = activeRecoveryPreset?.id === preset.id;
+                const isEditing = editingPresetId === preset.id;
+
+                return (
+                  <div
+                    key={preset.id}
+                    className={`rounded-xl border p-4 transition-colors ${
+                      isActive
+                        ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-900"
+                        : "border-neutral-200/70 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        {isEditing ? (
+                          <div className="space-y-3">
+                            <Input
+                              value={editingPresetLabel}
+                              onChange={(event) => setEditingPresetLabel(event.target.value)}
+                              className="h-9"
+                              autoFocus
+                            />
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={isActive ? "secondary" : "outline"}
+                                leftIcon={<Save className="h-3.5 w-3.5" />}
+                                onClick={() => renameRecoveryPreset(preset.id)}
+                              >
+                                Save
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                leftIcon={<X className="h-3.5 w-3.5" />}
+                                onClick={cancelEditingPreset}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setRecoveryPreset(preset.preset)}
+                            className="min-w-0 text-left"
+                          >
+                            <p className="truncate text-sm font-semibold">{preset.label}</p>
+                            <p
+                              className={`mt-2 text-xs ${
+                                isActive
+                                  ? "text-neutral-200 dark:text-neutral-600"
+                                  : "text-neutral-500 dark:text-neutral-400"
+                              }`}
+                            >
+                              {RECOVERY_PRESETS.find((entry) => entry.value === preset.preset)?.label}
+                            </p>
+                          </button>
+                        )}
+                      </div>
+                      {!isEditing && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => startEditingPreset(preset.id, preset.label)}
+                            className={`rounded-lg p-2 transition-colors ${
+                              isActive
+                                ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
+                                : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                            }`}
+                            aria-label={`Rename ${preset.label}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteRecoveryPreset(preset.id, preset.label)}
+                            className={`rounded-lg p-2 transition-colors ${
+                              isActive
+                                ? "text-white/75 hover:bg-white/10 hover:text-white dark:text-neutral-700 dark:hover:bg-neutral-900/10 dark:hover:text-neutral-900"
+                                : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                            }`}
+                            aria-label={`Delete ${preset.label}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {visibleRecoveryQueue.length > 0 ? (
           <div className="mt-6 grid gap-3 lg:grid-cols-5">
-            {recoveryQueue.map((item) => (
+            {visibleRecoveryQueue.map((item) => (
               <Link
                 key={item.id}
                 href={buildInvoiceIntentHref(item.id, recoveryIntent)}
@@ -574,7 +959,7 @@ function BillingContent() {
                   {fmt(item.outstandingAmount)}
                 </p>
                 <p className="mt-1 text-xs text-neutral-500">
-                  {fmt(item.collectedAmount)} collected so far • due {fmtDate(item.dueDate)}
+                  {fmt(item.collectedAmount)} collected so far | due {fmtDate(item.dueDate)}
                 </p>
                 <p className="mt-2 text-xs font-medium text-neutral-500">{recoveryActionLabel}</p>
               </Link>

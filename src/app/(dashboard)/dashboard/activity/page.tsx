@@ -1,11 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
-import { Activity, AlertTriangle, CreditCard, Shield } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowUpRight,
+  CreditCard,
+  Shield,
+} from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { usePermissions } from "@/hooks/use-permissions";
+import {
+  getActivityDestination,
+  isAttentionActivity,
+} from "@/lib/activity/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   getActivityIcon,
@@ -20,6 +33,7 @@ import {
 import { isCollectionsActivityAction } from "@/lib/invoices/follow-up";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
 import { useOrgStore } from "@/stores/org-store";
+import { cn } from "@/lib/utils/cn";
 
 interface ActivityEntry {
   id: string;
@@ -74,11 +88,99 @@ function isWorkflowAction(action: string) {
   ].includes(action);
 }
 
+function getActivityRoleDescription(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "finance_manager") {
+    return "Review billing exceptions, recovery reviews, and invoice workflow events without leaving the finance operating lane.";
+  }
+
+  if (role === "admin" || role === "owner") {
+    return "Review workflow, billing, and governance actions across the organization with access-management context included.";
+  }
+
+  return "Review workflow, billing, and governance actions across your organization.";
+}
+
+function getActivityRoleBadge(role: ReturnType<typeof usePermissions>["role"]) {
+  if (role === "finance_manager") {
+    return "Finance audit";
+  }
+
+  if (role === "admin" || role === "owner") {
+    return "Control plane";
+  }
+
+  return "Operational audit";
+}
+
+function getEmptyActivityCopy(
+  role: ReturnType<typeof usePermissions>["role"],
+  scope: ActivityScope
+) {
+  if (role === "finance_manager" && (scope === "billing" || scope === "collections")) {
+    return "No finance-side events are currently recorded for this scope. Try a broader filter or check back after the next billing action.";
+  }
+
+  if ((role === "admin" || role === "owner") && scope === "governance") {
+    return "No governance changes are recorded for this view. Try another scope or return after the next control-plane action.";
+  }
+
+  return "Try another filter or come back after the next operational action.";
+}
+
+function getDefaultActivityScope(
+  role: ReturnType<typeof usePermissions>["role"]
+): ActivityScope {
+  if (role === "finance_manager") {
+    return "billing";
+  }
+
+  if (role === "admin" || role === "owner") {
+    return "governance";
+  }
+
+  return "workflow";
+}
+
+function getActivityActionLabel(
+  entry: ActivityEntry,
+  role: ReturnType<typeof usePermissions>["role"]
+) {
+  if (entry.entity_type === "invoice") {
+    if (isAttentionActivity(entry)) {
+      return role === "finance_manager" ? "Open recovery" : "Review invoice";
+    }
+
+    if (
+      entry.action === "invoice.payment_recorded" ||
+      entry.action === "invoice.stripe_linked"
+    ) {
+      return "View history";
+    }
+
+    return "Open invoice";
+  }
+
+  if (entry.entity_type === "client") {
+    return "Open client";
+  }
+
+  if (entry.entity_type === "member" || entry.entity_type === "org") {
+    return role === "admin" || role === "owner" ? "Open admin" : "Open settings";
+  }
+
+  if (entry.action === "payment_failed" || entry.action === "subscription_cancelled") {
+    return role === "finance_manager" ? "Open billing" : "Review impact";
+  }
+
+  return "Open context";
+}
+
 function ActivityPageContent() {
   const { currentOrg } = useOrgStore();
+  const { role, can } = usePermissions();
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [scope, setScope] = useState<ActivityScope>("all");
+  const [scope, setScope] = useState<ActivityScope>(() => getDefaultActivityScope(null));
 
   useEffect(() => {
     async function fetch() {
@@ -95,6 +197,12 @@ function ActivityPageContent() {
     }
     void fetch();
   }, [currentOrg]);
+
+  useEffect(() => {
+    setScope((current) =>
+      current === "all" ? getDefaultActivityScope(role) : current
+    );
+  }, [role]);
 
   const filteredEntries = useMemo(
     () =>
@@ -198,8 +306,27 @@ function ActivityPageContent() {
           Activity log
         </h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Review workflow, billing, and governance actions across your organization.
+          {getActivityRoleDescription(role)}
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Badge variant="outline">{getActivityRoleBadge(role)}</Badge>
+          {can("org:billing") ? (
+            <Link
+              href="/settings/billing"
+              className="text-xs font-medium text-neutral-600 underline-offset-4 hover:underline dark:text-neutral-300"
+            >
+              Open billing controls
+            </Link>
+          ) : null}
+          {role === "admin" || role === "owner" ? (
+            <Link
+              href="/dashboard/admin"
+              className="text-xs font-medium text-neutral-600 underline-offset-4 hover:underline dark:text-neutral-300"
+            >
+              Open admin overview
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -240,6 +367,23 @@ function ActivityPageContent() {
         ))}
       </div>
 
+      <div className="rounded-xl border border-neutral-200/70 bg-neutral-50/80 px-4 py-3 text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900/60 dark:text-neutral-400">
+        {role === "finance_manager"
+          ? "Finance focus: billing exceptions and recovery reviews usually carry the most signal for this role."
+          : role === "admin" || role === "owner"
+            ? "Control-plane focus: governance and privileged changes are included alongside the billing and workflow timeline."
+            : "Workflow focus: use the scope chips to narrow the operating timeline to the events that matter most right now."}
+        {scope !== getDefaultActivityScope(role) ? (
+          <button
+            type="button"
+            onClick={() => setScope(getDefaultActivityScope(role))}
+            className="ml-2 inline-flex font-medium text-neutral-700 underline-offset-4 hover:underline dark:text-neutral-200"
+          >
+            Reset to recommended scope
+          </button>
+        ) : null}
+      </div>
+
       <Card>
         {loading ? (
           <div className="space-y-4">
@@ -260,7 +404,7 @@ function ActivityPageContent() {
               No activity recorded for this view.
             </p>
             <p className="mt-1 text-xs text-neutral-400">
-              Try another filter or come back after the next operational action.
+              {getEmptyActivityCopy(role, scope)}
             </p>
           </div>
         ) : (
@@ -273,11 +417,17 @@ function ActivityPageContent() {
                 entry.profile?.full_name || entry.profile?.email || "System";
               const detail = getActivitySubject(entry);
               const accountability = workflowAccountability.get(entry.entity_id ?? "");
+              const destination = getActivityDestination(entry, role);
+              const needsAttention = isAttentionActivity(entry);
 
               return (
                 <div
                   key={entry.id}
-                  className="flex items-start gap-4 py-4 first:pt-0 last:pb-0"
+                  className={cn(
+                    "flex items-start gap-4 py-4 first:pt-0 last:pb-0",
+                    needsAttention &&
+                      "rounded-xl bg-neutral-50/70 px-3 dark:bg-neutral-900/40"
+                  )}
                 >
                   <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-neutral-100 dark:bg-neutral-800">
                     <Icon className="h-3.5 w-3.5 text-neutral-500" />
@@ -311,6 +461,20 @@ function ActivityPageContent() {
                           : ""}
                       </p>
                     )}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Link href={destination}>
+                        <Button
+                          size="sm"
+                          variant={needsAttention ? "outline" : "ghost"}
+                          rightIcon={<ArrowUpRight className="h-3.5 w-3.5" />}
+                        >
+                          {getActivityActionLabel(entry, role)}
+                        </Button>
+                      </Link>
+                      {needsAttention ? (
+                        <Badge variant="warning">Needs attention</Badge>
+                      ) : null}
+                    </div>
                   </div>
                   {color && (
                     <Badge variant={color} className="mt-1 shrink-0 capitalize">
