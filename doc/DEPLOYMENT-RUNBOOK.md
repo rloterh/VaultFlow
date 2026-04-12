@@ -9,7 +9,7 @@ Ship VaultFlow with predictable runtime configuration, healthy Stripe connectivi
 1. Confirm the target branch has passed:
    - `npm run verify`
 2. Confirm all required environment variables are present in the target environment.
-3. Confirm Supabase schema is current through `supabase-schema-v5.sql`.
+3. Confirm Supabase schema is current through the latest tracked file in `supabase/migrations`.
 4. Confirm Stripe webhook signing secret matches the deployed environment.
 
 ## Required Environment
@@ -28,15 +28,18 @@ Ship VaultFlow with predictable runtime configuration, healthy Stripe connectivi
 - `STRIPE_PRO_PRICE_ID`
 - `STRIPE_ENTERPRISE_PRICE_ID`
 
+Note:
+Public `NEXT_PUBLIC_*` values are compiled into the browser bundle. Any change to those values requires a rebuild or redeploy before client-side auth and Supabase flows will reflect the update.
+
 ## Supabase Release Steps
 
 1. Link the repo to the intended Supabase project.
-2. Apply the tracked SQL in order.
-3. Validate:
+2. If the environment predates tracked migrations, repair migration history once.
+3. Run `supabase db push --linked`.
+4. Validate:
    - role enum and RLS policies are present
    - `vendor_client_assignments` exists
    - Stripe invoice/payment event tables and columns exist through Phase 3
-4. Prefer converting the root SQL files into tracked Supabase CLI migrations before high-frequency production releases, so schema rollout becomes auditable and repeatable.
 
 ## Stripe Release Steps
 
@@ -103,7 +106,7 @@ If the deploy is healthy but billing behavior regresses:
 
 1. stop external traffic to the new deploy
 2. validate webhook secret and price IDs first
-3. compare schema state versus `supabase-schema-v5.sql`
+3. compare schema state versus the latest tracked migration
 4. roll back application deploy only after confirming no new migration mismatch was introduced
 
 If schema drift caused the issue, fix schema alignment before re-promoting the app.

@@ -8,10 +8,14 @@
     "start": "next start",
     "lint": "eslint src eslint.config.mjs next.config.ts --ext .js,.jsx,.ts,.tsx --max-warnings=0",
     "lint:fix": "eslint src eslint.config.mjs next.config.ts --ext .js,.jsx,.ts,.tsx --fix",
+    "test": "vitest",
+    "test:run": "vitest run",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\"",
     "typecheck": "next typegen && tsc --noEmit -p tsconfig.typecheck.json",
-    "verify": "npm run lint && npm run typecheck && npm run build",
+    "verify": "npm run lint && npm run typecheck && npm run test:run && npm run build",
+    "db:migrations:list": "supabase migration list --linked",
+    "db:migrations:push": "supabase db push --linked",
     "prepare": "husky"
   },
   "dependencies": {
@@ -24,7 +28,7 @@
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.468.0",
-    "next": "^15.1.0",
+    "next": "^15.5.15",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.0",
@@ -38,14 +42,15 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.0.0",
-    "eslint-config-next": "^15.1.0",
+    "eslint-config-next": "^15.5.15",
     "eslint-config-prettier": "^9.1.0",
     "husky": "^9.1.0",
     "lint-staged": "^15.3.0",
     "postcss": "^8.5.0",
     "prettier": "^3.4.0",
     "tailwindcss": "^4.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.4"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
