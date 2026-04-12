@@ -300,6 +300,19 @@ function buildSummary(
     };
   }
 
+  if (signals.every((signal) => signal.tone === "success")) {
+    return {
+      tone: "success",
+      title: "Enterprise account signals are steady",
+      detail:
+        role === "vendor"
+          ? `Your assigned portfolio is operating within plan right now, so this ${scopeLabel} can stay in monitor mode.`
+          : isReadOnlyRole(role)
+            ? `This ${scopeLabel} is healthy enough for oversight mode, with no immediate account-level intervention required.`
+            : `The current ${scopeLabel} is not surfacing meaningful enterprise-account risk, so operators can stay in monitor mode.`,
+    };
+  }
+
   return {
     tone: "warning",
     title: "Enterprise account signals need follow-through",

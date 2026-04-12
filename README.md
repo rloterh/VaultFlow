@@ -66,15 +66,15 @@ Fill in the required Supabase and Stripe values before running the app.
 
 ### 3. Apply schema
 
-Apply the tracked SQL in this order against your linked Supabase project:
+The canonical workflow now uses tracked Supabase migrations under [supabase/migrations](c:/Users/HP/OneDrive/Desktop/mp/VaultFlow/supabase/migrations).
 
-1. `supabase-schema.sql`
-2. `supabase-schema-v2.sql`
-3. `supabase-schema-rbac-expansion.sql`
-4. `supabase-schema-vendor-assignments.sql`
-5. `supabase-schema-v3.sql`
-6. `supabase-schema-v4.sql`
-7. `supabase-schema-v5.sql`
+Fresh or newly linked environments:
+
+```bash
+npm run db:migrations:push
+```
+
+Existing environments that were migrated manually should first baseline the tracked migration history, then use `db push` going forward. See [MIGRATION-WORKFLOW.md](c:/Users/HP/OneDrive/Desktop/mp/VaultFlow/doc/MIGRATION-WORKFLOW.md).
 
 ### 4. Run locally
 
@@ -161,6 +161,6 @@ doc/
 
 ## Additional Notes
 
-- `supabase/` is treated as local CLI state and is ignored from source control in this workspace.
+- `supabase/.temp` remains local-only, but tracked migrations now live in [supabase/migrations](c:/Users/HP/OneDrive/Desktop/mp/VaultFlow/supabase/migrations).
 - Vendor access is assignment-scoped through `vendor_client_assignments`.
 - Governance and billing lifecycle helpers are concentrated under `src/lib/`.

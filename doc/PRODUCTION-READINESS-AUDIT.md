@@ -5,9 +5,9 @@ Branch: `feature/phase-06-intelligence-and-alerting`
 
 ## Executive Summary
 
-VaultFlow is now in a credible enterprise-grade state across product surface area, role-aware operations, billing continuity, governance tooling, and production deployment guidance. The current branch has passed local lint, typecheck, and production build verification, and the linked Supabase project has been advanced through the tracked schema files up to `supabase-schema-v5.sql`.
+VaultFlow is now in a credible enterprise-grade state across product surface area, role-aware operations, billing continuity, governance tooling, and production deployment guidance. The current branch has passed local lint, typecheck, regression tests, and production build verification, and the linked Supabase project is aligned with the tracked migration chain.
 
-The strongest remaining gap is not feature breadth but regression automation depth. The application has mature operating surfaces, but the repository still needs a checked-in unit/integration test runner and tracked Supabase CLI migrations to reach a stricter release-engineering posture.
+The previous release-engineering gaps around regression automation depth and tracked migration workflow have now been closed. Remaining work is optional polish rather than a blocker to calling the repository production-ready.
 
 ## Phase Completion Review
 
@@ -49,8 +49,10 @@ Validated outcomes:
 
 - governance and moderation surfaces are present
 - deployment runbook and environment posture are documented
-- CI now reflects the actual `dev` integration flow and uses a single `npm run verify` gate
+- CI now reflects the actual `dev` integration flow and includes lint, typecheck, regression tests, and migration-presence validation
 - deprecated `next lint` usage has been removed in favor of the ESLint CLI
+- added a checked-in regression suite for pure business-logic helpers
+- added tracked Supabase CLI migrations and a documented baseline workflow for existing environments
 
 ## What Was Hardened In This Follow-up Pass
 
@@ -67,20 +69,13 @@ Passed on this branch:
 
 - `npm run lint`
 - `npm run typecheck`
+- `npm run test:run`
 - `npm run build`
-- linked Supabase schema apply:
-  - `supabase-schema-rbac-expansion.sql`
-  - `supabase-schema-vendor-assignments.sql`
-  - `supabase-schema-v3.sql`
-  - `supabase-schema-v4.sql`
-  - `supabase-schema-v5.sql`
+- linked Supabase production schema confirmed against tracked migrations
 
 ## Blocking Gaps
 
-These should be treated as the remaining blockers before calling the repository fully release-hardened:
-
-1. No checked-in automated test runner or business-logic regression suite currently exists.
-2. Supabase rollout is still managed through root SQL files instead of tracked CLI migrations.
+No blocking release-engineering gaps remain for the current branch baseline.
 
 ## Non-Blocking Polish
 
@@ -94,6 +89,6 @@ These do not block release, but they would improve confidence and operability:
 
 If the team wants to continue beyond the current completion baseline, the next best slice is:
 
-1. Introduce a lightweight checked-in test runner focused on `src/lib/` business logic.
-2. Add regression coverage for billing intelligence, client account signals, and governance summaries.
-3. Convert the current ordered SQL release files into tracked Supabase CLI migrations.
+1. Expand the current regression suite into governance summaries, webhook normalization, and export helpers.
+2. Add browser smoke coverage for the highest-value operator flows.
+3. Tighten release note automation around billing-affecting changes.
