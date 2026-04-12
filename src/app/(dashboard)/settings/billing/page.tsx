@@ -31,6 +31,7 @@ import { buildBillingRecoveryBriefing } from "@/lib/billing/recovery-briefing";
 import { useStripeCheckout, useStripePortal } from "@/hooks/use-stripe";
 import { buildBillingWorkspaceSummary } from "@/lib/billing/intelligence";
 import { buildInvoiceIntentHref } from "@/lib/invoices/history";
+import { buildDashboardIntelligenceSnapshot } from "@/lib/operations/dashboard-intelligence";
 import {
   filterPaymentRecoveryQueue,
   getPaymentRecoveryQueue,
@@ -137,12 +138,15 @@ type BillingFetchState = {
   invoices: Array<
     Pick<
       Invoice,
+      | "client_id"
       | "id"
       | "invoice_number"
       | "status"
       | "total"
       | "amount_paid"
       | "due_date"
+      | "paid_at"
+      | "last_recovery_reviewed_at"
       | "credited_amount"
       | "refunded_amount"
       | "voided_at"
@@ -203,10 +207,10 @@ function BillingContent() {
 
       const sb = getSupabaseBrowserClient();
 
-      const [invoiceRes, memberRes, eventRes] = await Promise.all([
+        const [invoiceRes, memberRes, eventRes] = await Promise.all([
         sb
           .from("invoices")
-          .select("id, invoice_number, status, total, amount_paid, due_date, credited_amount, refunded_amount, voided_at, client:clients(name)")
+          .select("client_id, id, invoice_number, status, total, amount_paid, due_date, paid_at, last_recovery_reviewed_at, credited_amount, refunded_amount, voided_at, client:clients(name)")
           .eq("org_id", currentOrg.id),
         sb
           .from("org_memberships")
@@ -239,18 +243,21 @@ function BillingContent() {
       }
 
       const invoices = (invoiceRes.data ?? []) as Array<
-        Pick<
-          Invoice,
-          | "id"
-          | "invoice_number"
-          | "status"
-          | "total"
-          | "amount_paid"
-          | "due_date"
-          | "credited_amount"
-          | "refunded_amount"
-          | "voided_at"
-        > & {
+          Pick<
+            Invoice,
+            | "client_id"
+            | "id"
+            | "invoice_number"
+            | "status"
+            | "total"
+            | "amount_paid"
+            | "due_date"
+            | "paid_at"
+            | "last_recovery_reviewed_at"
+            | "credited_amount"
+            | "refunded_amount"
+            | "voided_at"
+          > & {
           client?: { name?: string | null };
         }
       >;
@@ -332,16 +339,26 @@ function BillingContent() {
   );
   const canManageBilling = can("org:billing");
   const canRecoverInvoices = can("invoices:update");
-  const recoveryActionLabel = canManageBilling
-    ? "Manage in Stripe"
-    : canRecoverInvoices
-      ? "Reconcile invoice"
-      : "Review balance";
-  const recoveryIntent = canRecoverInvoices ? "record-payment" : "history";
-  const primaryInsight = workspaceSummary.insights[0];
-  const recoveryBriefing = useMemo(
-    () =>
-      buildBillingRecoveryBriefing({
+    const recoveryActionLabel = canManageBilling
+      ? "Manage in Stripe"
+      : canRecoverInvoices
+        ? "Reconcile invoice"
+        : "Review balance";
+    const recoveryIntent = canRecoverInvoices ? "record-payment" : "history";
+    const primaryInsight = workspaceSummary.insights[0];
+    const billingIntelligence = useMemo(
+      () =>
+        buildDashboardIntelligenceSnapshot({
+          invoices: billingState.invoices,
+          clients: [],
+          activity: billingState.events,
+          scopeLabel: "billing workspace",
+        }),
+      [billingState.events, billingState.invoices]
+    );
+    const recoveryBriefing = useMemo(
+      () =>
+        buildBillingRecoveryBriefing({
         label:
           activeRecoveryPreset?.label ??
           RECOVERY_PRESETS.find((entry) => entry.value === recoveryPreset)?.label ??
@@ -568,9 +585,9 @@ function BillingContent() {
         })}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <Card>
-          <div className="flex items-start justify-between gap-4">
+        <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+          <Card>
+            <div className="flex items-start justify-between gap-4">
             <div>
               <CardTitle>Capacity and commercial fit</CardTitle>
               <CardDescription>
@@ -699,12 +716,87 @@ function BillingContent() {
                 </Button>
               )}
             </div>
-          </div>
-        </Card>
-      </div>
+            </div>
+          </Card>
+        </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {workspaceSummary.collectionMetrics.map((metric) => (
+        <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+          <Card>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <CardTitle>Forecast and anomaly watch</CardTitle>
+                <CardDescription>
+                  Short-horizon intelligence over cash timing, overdue concentration, and recovery freshness.
+                </CardDescription>
+              </div>
+              <Badge variant="outline">Phase 6</Badge>
+            </div>
+            <div className="mt-6 grid gap-3 md:grid-cols-3">
+              {billingIntelligence.forecastMetrics.map((metric) => (
+                <div
+                  key={metric.label}
+                  className={cn("rounded-xl border p-4", toneShellClasses(metric.tone))}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                      {metric.label}
+                    </p>
+                    <Badge variant={toneBadgeVariant(metric.tone)}>{metric.tone}</Badge>
+                  </div>
+                  <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {metric.value}
+                  </p>
+                  <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                    {metric.detail}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <CardTitle>Escalation signals</CardTitle>
+                <CardDescription>
+                  Investigate the strongest anomaly signals before they become payment or renewal incidents.
+                </CardDescription>
+              </div>
+              <Badge variant={toneBadgeVariant(primaryInsight.tone)}>{primaryInsight.title}</Badge>
+            </div>
+            <div className="mt-6 space-y-3">
+              {billingIntelligence.alerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className={cn("rounded-xl border p-4", toneShellClasses(alert.tone))}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Badge variant={toneBadgeVariant(alert.tone)}>
+                        {alert.tone === "success" ? "stable" : "anomaly"}
+                      </Badge>
+                      <p className="mt-3 text-sm font-medium text-neutral-900 dark:text-white">
+                        {alert.title}
+                      </p>
+                      <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+                        {alert.detail}
+                      </p>
+                    </div>
+                  </div>
+                  <Link
+                    href={alert.href}
+                    className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white"
+                  >
+                    {alert.actionLabel}
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {workspaceSummary.collectionMetrics.map((metric) => (
           <Card key={metric.label}>
             <div className="flex items-center gap-2">
               <Wallet className="h-4 w-4 text-neutral-500" />

@@ -73,6 +73,7 @@ import {
   getClientOpsViewForQueuePreset,
 } from "@/lib/operations/client-views";
 import { buildWorkflowAccountabilityMap } from "@/lib/operations/accountability";
+import { buildDashboardIntelligenceSnapshot } from "@/lib/operations/dashboard-intelligence";
 import {
   fetchVendorAssignedClientIds,
   filterClientsByAssignment,
@@ -548,6 +549,12 @@ function ReportsContent() {
     status: filters.status,
     summary,
   });
+  const reportIntelligence = buildDashboardIntelligenceSnapshot({
+    invoices: report.invoices,
+    clients,
+    activity: [],
+    scopeLabel: isVendorRole(role) ? "assigned report slice" : "reporting slice",
+  });
 
   reminders.forEach((entry) => {
     if (!reminderLookup.has(entry.entity_id)) {
@@ -988,14 +995,105 @@ function ReportsContent() {
         </div>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        {report.insights.map((insight) => (
-          <InsightCard key={insight.id} insight={insight} />
-        ))}
-      </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          {report.insights.map((insight) => (
+            <InsightCard key={insight.id} insight={insight} />
+          ))}
+        </div>
 
-      {report.invoices.length === 0 ? (
+        <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
           <Card>
+            <CardHeader className="mb-0">
+              <CardTitle>Forecast lens</CardTitle>
+              <CardDescription>
+                Predictive readouts for the exact reporting slice you are analyzing right now.
+              </CardDescription>
+            </CardHeader>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {reportIntelligence.forecastMetrics.map((metric) => (
+                <div
+                  key={metric.label}
+                  className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                      {metric.label}
+                    </p>
+                    <Badge
+                      variant={
+                        metric.tone === "danger"
+                          ? "danger"
+                          : metric.tone === "warning"
+                            ? "warning"
+                            : metric.tone === "success"
+                              ? "success"
+                              : "outline"
+                      }
+                    >
+                      {metric.tone}
+                    </Badge>
+                  </div>
+                  <p className="mt-3 text-lg font-semibold text-neutral-900 dark:text-white">
+                    {metric.value}
+                  </p>
+                  <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                    {metric.detail}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader className="mb-0">
+              <CardTitle>Anomaly watch</CardTitle>
+              <CardDescription>
+                Concentration, slowdown, and stale recovery signals across the active report slice.
+              </CardDescription>
+            </CardHeader>
+            <div className="mt-4 space-y-3">
+              {reportIntelligence.alerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className="rounded-xl border border-neutral-200/70 p-4 dark:border-neutral-800"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <Badge
+                        variant={
+                          alert.tone === "danger"
+                            ? "danger"
+                            : alert.tone === "warning"
+                              ? "warning"
+                              : alert.tone === "success"
+                                ? "success"
+                                : "outline"
+                        }
+                      >
+                        {alert.tone === "success" ? "stable" : "anomaly"}
+                      </Badge>
+                      <p className="mt-3 text-sm font-semibold text-neutral-900 dark:text-white">
+                        {alert.title}
+                      </p>
+                      <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
+                        {alert.detail}
+                      </p>
+                    </div>
+                  </div>
+                  <Link
+                    href={alert.href}
+                    className="mt-4 inline-flex text-sm font-medium text-neutral-900 dark:text-white"
+                  >
+                    {alert.actionLabel}
+                  </Link>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        {report.invoices.length === 0 ? (
+            <Card>
             <EmptyState
               title="No invoices match these filters"
               description={getEmptyReportDescription(role)}
