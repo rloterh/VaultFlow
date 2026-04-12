@@ -6,7 +6,7 @@ import {
   createCheckoutSession,
   PRICE_IDS,
 } from "@/lib/stripe/client";
-import { APP_URL } from "@/lib/utils/constants";
+import { buildAppUrl } from "@/lib/utils/constants";
 
 export async function POST(request: Request) {
   try {
@@ -72,8 +72,8 @@ export async function POST(request: Request) {
       customerId,
       priceId,
       orgId,
-      `${APP_URL}/settings/billing`,
-      `${APP_URL}/settings/billing`
+      buildAppUrl("/settings/billing"),
+      buildAppUrl("/settings/billing")
     );
 
     return NextResponse.json({ url });
