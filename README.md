@@ -64,6 +64,9 @@ cp .env.example .env.local
 
 Fill in the required Supabase and Stripe values before running the app.
 
+Important:
+Public `NEXT_PUBLIC_*` values are baked into the client bundle at build time. If you change them, rebuild or redeploy the app before expecting the browser to pick them up.
+
 ### 3. Apply schema
 
 The canonical workflow now uses tracked Supabase migrations under [supabase/migrations](c:/Users/HP/OneDrive/Desktop/mp/VaultFlow/supabase/migrations).
@@ -164,3 +167,4 @@ doc/
 - `supabase/.temp` remains local-only, but tracked migrations now live in [supabase/migrations](c:/Users/HP/OneDrive/Desktop/mp/VaultFlow/supabase/migrations).
 - Vendor access is assignment-scoped through `vendor_client_assignments`.
 - Governance and billing lifecycle helpers are concentrated under `src/lib/`.
+- If `.env.production` exists in your workspace or hosting environment, it participates in production builds and can override values you expected from `.env.local`.

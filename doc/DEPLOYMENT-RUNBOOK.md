@@ -28,6 +28,9 @@ Ship VaultFlow with predictable runtime configuration, healthy Stripe connectivi
 - `STRIPE_PRO_PRICE_ID`
 - `STRIPE_ENTERPRISE_PRICE_ID`
 
+Note:
+Public `NEXT_PUBLIC_*` values are compiled into the browser bundle. Any change to those values requires a rebuild or redeploy before client-side auth and Supabase flows will reflect the update.
+
 ## Supabase Release Steps
 
 1. Link the repo to the intended Supabase project.

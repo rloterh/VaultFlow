@@ -1,13 +1,15 @@
 # VaultFlow Production Readiness Audit
 
-Date: 2026-04-11
-Branch: `feature/phase-06-intelligence-and-alerting`
+Date: 2026-04-12
+Branch: `main`
 
 ## Executive Summary
 
 VaultFlow is now in a credible enterprise-grade state across product surface area, role-aware operations, billing continuity, governance tooling, and production deployment guidance. The current branch has passed local lint, typecheck, regression tests, and production build verification, and the linked Supabase project is aligned with the tracked migration chain.
 
 The previous release-engineering gaps around regression automation depth and tracked migration workflow have now been closed. Remaining work is optional polish rather than a blocker to calling the repository production-ready.
+
+The latest hardening follow-up also removed a high-severity Next.js advisory by upgrading the repository to `next@15.5.15`, and the current `npm audit` result is clean.
 
 ## Phase Completion Review
 
