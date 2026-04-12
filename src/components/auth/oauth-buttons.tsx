@@ -4,20 +4,31 @@ import { useState } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { buildAppUrl } from "@/lib/utils/constants";
+import { useUIStore } from "@/stores/ui-store";
 
 export function OAuthButtons() {
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
+  const addToast = useUIStore((state) => state.addToast);
 
   async function signInWithProvider(provider: "google" | "github") {
     setLoadingProvider(provider);
     const supabase = getSupabaseBrowserClient();
 
-    await supabase.auth.signInWithOAuth({
+    const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
         redirectTo: buildAppUrl("/api/auth/callback"),
       },
     });
+
+    if (error) {
+      addToast({
+        type: "error",
+        title: `Unable to continue with ${provider}`,
+        description: error.message,
+      });
+      setLoadingProvider(null);
+    }
   }
 
   return (
