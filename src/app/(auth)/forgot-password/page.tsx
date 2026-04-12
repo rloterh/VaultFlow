@@ -8,7 +8,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useUIStore } from "@/stores/ui-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { APP_URL } from "@/lib/utils/constants";
+import { buildAppUrl } from "@/lib/utils/constants";
 
 export default function ForgotPasswordPage() {
   const addToast = useUIStore((s) => s.addToast);
@@ -24,7 +24,7 @@ export default function ForgotPasswordPage() {
     const supabase = getSupabaseBrowserClient();
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${APP_URL}/api/auth/callback?next=/settings`,
+      redirectTo: buildAppUrl("/api/auth/callback?next=/settings"),
     });
 
     setIsLoading(false);

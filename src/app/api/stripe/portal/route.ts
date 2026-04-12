@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import { hasPermission, type Role } from "@/config/roles";
 import { createPortalSession } from "@/lib/stripe/client";
-import { APP_URL } from "@/lib/utils/constants";
+import { buildAppUrl } from "@/lib/utils/constants";
 
 export async function POST(request: Request) {
   try {
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
 
     const url = await createPortalSession(
       org.stripe_customer_id,
-      `${APP_URL}/settings/billing`
+      buildAppUrl("/settings/billing")
     );
 
     return NextResponse.json({ url });

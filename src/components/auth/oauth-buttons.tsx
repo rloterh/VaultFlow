@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { APP_URL } from "@/lib/utils/constants";
+import { buildAppUrl } from "@/lib/utils/constants";
 
 export function OAuthButtons() {
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
@@ -15,7 +15,7 @@ export function OAuthButtons() {
     await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${APP_URL}/api/auth/callback`,
+        redirectTo: buildAppUrl("/api/auth/callback"),
       },
     });
   }

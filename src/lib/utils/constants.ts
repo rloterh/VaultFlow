@@ -1,5 +1,18 @@
 export const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "VaultFlow";
-export const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
+function normalizeAppUrl(url: string) {
+  return url.replace(/\/+$/, "");
+}
+
+export const APP_URL = normalizeAppUrl(
+  process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
+);
+
+export function buildAppUrl(path = "/") {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
+  return new URL(normalizedPath, `${APP_URL}/`).toString();
+}
 
 export const AUTH_ROUTES = {
   login: "/login",
