@@ -10,7 +10,33 @@ const STRIPE_PRO_PRICE_ID = "STRIPE_PRO_PRICE_ID";
 const STRIPE_ENTERPRISE_PRICE_ID = "STRIPE_ENTERPRISE_PRICE_ID";
 
 function readEnv(name: string) {
-  const value = process.env[name];
+  const value = (() => {
+    switch (name) {
+      case SUPABASE_URL_KEY:
+        return process.env.NEXT_PUBLIC_SUPABASE_URL;
+      case SUPABASE_ANON_KEY:
+        return process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      case SUPABASE_SERVICE_ROLE_KEY:
+        return process.env.SUPABASE_SERVICE_ROLE_KEY;
+      case APP_URL_KEY:
+        return process.env.NEXT_PUBLIC_APP_URL;
+      case APP_NAME_KEY:
+        return process.env.NEXT_PUBLIC_APP_NAME;
+      case STRIPE_SECRET_KEY:
+        return process.env.STRIPE_SECRET_KEY;
+      case STRIPE_WEBHOOK_SECRET:
+        return process.env.STRIPE_WEBHOOK_SECRET;
+      case STRIPE_PUBLISHABLE_KEY:
+        return process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+      case STRIPE_PRO_PRICE_ID:
+        return process.env.STRIPE_PRO_PRICE_ID;
+      case STRIPE_ENTERPRISE_PRICE_ID:
+        return process.env.STRIPE_ENTERPRISE_PRICE_ID;
+      default:
+        return undefined;
+    }
+  })();
+
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
