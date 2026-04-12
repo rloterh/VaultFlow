@@ -19,7 +19,20 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
-function CustomTooltip({ active, payload, label }: any) {
+interface RevenueTooltipPayload {
+  value: number;
+  payload: RevenueDataPoint;
+}
+
+function CustomTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: RevenueTooltipPayload[];
+  label?: string;
+}) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-neutral-200 bg-white px-4 py-3 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">

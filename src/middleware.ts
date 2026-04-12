@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
-import { PROTECTED_ROUTES, PUBLIC_ROUTES } from "@/lib/utils/constants";
+import { PROTECTED_ROUTES } from "@/lib/utils/constants";
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;

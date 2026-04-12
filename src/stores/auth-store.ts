@@ -1,7 +1,8 @@
 import { create } from "zustand";
+import type { AuthChangeEvent, Session, Subscription, User } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import type { Profile, OrgMembership } from "@/types/auth";
-import type { User } from "@supabase/supabase-js";
+import { useOrgStore } from "@/stores/org-store";
+import type { OrgMembership, Profile } from "@/types/auth";
 
 interface AuthState {
   user: User | null;
@@ -9,8 +10,8 @@ interface AuthState {
   memberships: OrgMembership[];
   isLoading: boolean;
   isInitialized: boolean;
+  isInitializing: boolean;
 
-  // Actions
   initialize: () => Promise<void>;
   setUser: (user: User | null) => void;
   setProfile: (profile: Profile | null) => void;
@@ -19,61 +20,121 @@ interface AuthState {
   refreshProfile: () => Promise<void>;
 }
 
+let authSubscription: Subscription | null = null;
+
+async function loadUserWorkspace(user: User) {
+  const supabase = getSupabaseBrowserClient();
+
+  const [{ data: profile }, { data: memberships }] = await Promise.all([
+    supabase.from("profiles").select("*").eq("id", user.id).single(),
+    supabase
+      .from("org_memberships")
+      .select("*, organization:organizations(*)")
+      .eq("user_id", user.id)
+      .eq("is_active", true),
+  ]);
+
+  return {
+    profile,
+    memberships: (memberships ?? []) as OrgMembership[],
+  };
+}
+
+async function syncSessionState(
+  set: (partial: Partial<AuthState>) => void,
+  event: AuthChangeEvent,
+  session: Session | null
+) {
+  if (event === "SIGNED_OUT" || !session?.user) {
+    useOrgStore.getState().clear();
+    set({
+      user: null,
+      profile: null,
+      memberships: [],
+      isLoading: false,
+      isInitialized: true,
+      isInitializing: false,
+    });
+    return;
+  }
+
+  const nextUser = session.user;
+  const { profile, memberships } = await loadUserWorkspace(nextUser);
+
+  set({
+    user: nextUser,
+    profile,
+    memberships,
+    isLoading: false,
+    isInitialized: true,
+    isInitializing: false,
+  });
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   profile: null,
   memberships: [],
   isLoading: true,
   isInitialized: false,
+  isInitializing: false,
 
   initialize: async () => {
+    const state = get();
+    if (state.isInitialized || state.isInitializing) {
+      return;
+    }
+
+    set({ isInitializing: true, isLoading: true });
     const supabase = getSupabaseBrowserClient();
 
     try {
-      // Get current session
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
       if (!user) {
-        set({ user: null, profile: null, memberships: [], isLoading: false, isInitialized: true });
-        return;
+        useOrgStore.getState().clear();
+        set({
+          user: null,
+          profile: null,
+          memberships: [],
+          isLoading: false,
+          isInitialized: true,
+          isInitializing: false,
+        });
+      } else {
+        const { profile, memberships } = await loadUserWorkspace(user);
+        set({
+          user,
+          profile,
+          memberships,
+          isLoading: false,
+          isInitialized: true,
+          isInitializing: false,
+        });
       }
 
-      // Fetch profile
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single();
+      if (!authSubscription) {
+        const {
+          data: { subscription },
+        } = supabase.auth.onAuthStateChange(async (event, session) => {
+          await syncSessionState(set, event, session);
+        });
 
-      // Fetch memberships with org data
-      const { data: memberships } = await supabase
-        .from("org_memberships")
-        .select("*, organization:organizations(*)")
-        .eq("user_id", user.id)
-        .eq("is_active", true);
-
-      set({
-        user,
-        profile,
-        memberships: memberships ?? [],
-        isLoading: false,
-        isInitialized: true,
-      });
-
-      // Listen for auth state changes
-      supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === "SIGNED_OUT") {
-          set({ user: null, profile: null, memberships: [], isLoading: false });
-        } else if (event === "SIGNED_IN" && session?.user) {
-          set({ user: session.user });
-          await get().refreshProfile();
-        } else if (event === "TOKEN_REFRESHED" && session?.user) {
-          set({ user: session.user });
-        }
-      });
+        authSubscription = subscription;
+      }
     } catch (error) {
       console.error("Auth initialization failed:", error);
-      set({ isLoading: false, isInitialized: true });
+      useOrgStore.getState().clear();
+      set({
+        isLoading: false,
+        isInitialized: true,
+        isInitializing: false,
+        user: null,
+        profile: null,
+        memberships: [],
+      });
     }
   },
 
@@ -86,27 +147,32 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signOut: async () => {
     const supabase = getSupabaseBrowserClient();
     set({ isLoading: true });
-    await supabase.auth.signOut();
-    set({ user: null, profile: null, memberships: [], isLoading: false });
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      set({ isLoading: false });
+      throw error;
+    }
+
+    useOrgStore.getState().clear();
+    set({
+      user: null,
+      profile: null,
+      memberships: [],
+      isLoading: false,
+      isInitialized: true,
+      isInitializing: false,
+    });
   },
 
   refreshProfile: async () => {
-    const supabase = getSupabaseBrowserClient();
     const { user } = get();
-    if (!user) return;
+    if (!user) {
+      useOrgStore.getState().clear();
+      return;
+    }
 
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .single();
-
-    const { data: memberships } = await supabase
-      .from("org_memberships")
-      .select("*, organization:organizations(*)")
-      .eq("user_id", user.id)
-      .eq("is_active", true);
-
-    set({ profile, memberships: memberships ?? [] });
+    const { profile, memberships } = await loadUserWorkspace(user);
+    set({ profile, memberships });
   },
 }));

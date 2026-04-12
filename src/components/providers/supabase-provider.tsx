@@ -4,14 +4,11 @@ import { useEffect, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/auth-store";
 
 export function SupabaseProvider({ children }: { children: ReactNode }) {
-  const initialize = useAuthStore((s) => s.initialize);
-  const isInitialized = useAuthStore((s) => s.isInitialized);
+  const initialize = useAuthStore((state) => state.initialize);
 
   useEffect(() => {
-    if (!isInitialized) {
-      initialize();
-    }
-  }, [initialize, isInitialized]);
+    void initialize();
+  }, [initialize]);
 
   return <>{children}</>;
 }

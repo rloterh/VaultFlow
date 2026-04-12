@@ -1,0 +1,182 @@
+"use client";
+
+import { ShieldAlert, ShieldCheck, Trash2, UserCog } from "lucide-react";
+import {
+  ROLE_METADATA,
+  getAssignableRoles,
+  type Role,
+} from "@/config/roles";
+import { ActionMenu } from "@/components/ui/action-menu";
+import { recordActivity } from "@/lib/activity/log";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useUIStore } from "@/stores/ui-store";
+import type { OrgMembership } from "@/types/auth";
+
+interface MemberRowActionsProps {
+  membership: OrgMembership;
+  actorRole: Role | null;
+  orgId?: string | null;
+  actorUserId?: string;
+  onUpdated: () => void | Promise<void>;
+}
+
+export function MemberRowActions({
+  membership,
+  actorRole,
+  orgId,
+  actorUserId,
+  onUpdated,
+}: MemberRowActionsProps) {
+  const addToast = useUIStore((s) => s.addToast);
+  const isSelf = actorUserId === membership.user_id;
+  const canManageMember =
+    !!actorRole &&
+    !isSelf &&
+    membership.role !== "owner" &&
+    getAssignableRoles(actorRole).includes(membership.role);
+
+  if (!canManageMember) {
+    return null;
+  }
+
+  async function updateRole(role: Role) {
+    if (!actorRole || !getAssignableRoles(actorRole).includes(role)) {
+      addToast({
+        type: "error",
+        title: "Role change blocked",
+        description: "That role is outside your assignment permissions.",
+      });
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    const { error } = await supabase
+      .from("org_memberships")
+      .update({ role })
+      .eq("id", membership.id);
+
+    if (error) {
+      addToast({
+        type: "error",
+        title: "Role update failed",
+        description: error.message,
+      });
+      return;
+    }
+
+    addToast({
+      type: "success",
+      title: "Role updated",
+      description: `${membership.profile?.full_name || membership.profile?.email || "Member"} is now ${role}.`,
+    });
+
+    if (orgId) {
+      await recordActivity({
+        orgId,
+        userId: actorUserId,
+        entityType: "member",
+        entityId: membership.id,
+        action: "member.role_changed",
+        metadata: {
+          email: membership.profile?.email ?? null,
+          name: membership.profile?.full_name ?? null,
+          previous_role: membership.role,
+          role,
+        },
+      });
+    }
+
+    await onUpdated();
+  }
+
+  async function deactivateMember() {
+    const confirmed = window.confirm(
+      `Remove ${membership.profile?.full_name || membership.profile?.email || "this member"} from the organization?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    const { error } = await supabase
+      .from("org_memberships")
+      .update({ is_active: false })
+      .eq("id", membership.id);
+
+    if (error) {
+      addToast({
+        type: "error",
+        title: "Unable to remove member",
+        description: error.message,
+      });
+      return;
+    }
+
+    addToast({
+      type: "success",
+      title: "Member removed",
+      description: `${membership.profile?.full_name || membership.profile?.email || "Member"} no longer has workspace access.`,
+    });
+
+    if (orgId) {
+      await recordActivity({
+        orgId,
+        userId: actorUserId,
+        entityType: "member",
+        entityId: membership.id,
+        action: "member.removed",
+        metadata: {
+          email: membership.profile?.email ?? null,
+          name: membership.profile?.full_name ?? null,
+          role: membership.role,
+        },
+      });
+    }
+
+    await onUpdated();
+  }
+
+  const assignableRoles = getAssignableRoles(actorRole).filter(
+    (role) => role !== membership.role
+  );
+
+  return (
+    <ActionMenu
+      triggerLabel={`Open member actions for ${membership.profile?.full_name || membership.profile?.email || "member"}`}
+      sections={[
+        {
+          items: [
+            {
+              label: "Review member access",
+              description: `${membership.role} - joined ${new Date(membership.joined_at).toLocaleDateString("en-GB")}`,
+              icon: UserCog,
+              disabled: true,
+            },
+          ],
+        },
+        {
+          label: "Role changes",
+          items: assignableRoles.map((role) => ({
+            label: `Set role to ${ROLE_METADATA[role].title}`,
+            description: ROLE_METADATA[role].description,
+            icon: role === "admin" ? ShieldCheck : ShieldAlert,
+            onSelect: () => updateRole(role),
+          })),
+        },
+        {
+          label: "Access",
+          items: [
+            {
+              label: "Remove member",
+              description: "Deactivate workspace access without deleting history.",
+              icon: Trash2,
+              tone: "danger",
+              onSelect: deactivateMember,
+            },
+          ],
+        },
+      ]}
+    />
+  );
+}

@@ -6,11 +6,12 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "lint:fix": "next lint --fix",
+    "lint": "eslint src eslint.config.mjs next.config.ts --ext .js,.jsx,.ts,.tsx --max-warnings=0",
+    "lint:fix": "eslint src eslint.config.mjs next.config.ts --ext .js,.jsx,.ts,.tsx --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\"",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit -p tsconfig.typecheck.json",
+    "verify": "npm run lint && npm run typecheck && npm run build",
     "prepare": "husky"
   },
   "dependencies": {
