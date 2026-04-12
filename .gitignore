@@ -50,3 +50,4 @@ coverage/
 
 # Claude
 .claude/
+.env.production
