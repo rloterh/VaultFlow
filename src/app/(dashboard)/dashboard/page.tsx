@@ -15,6 +15,7 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Avatar, Badge, Skeleton } from "@/components/ui/badge";
 import { RevenueChart, StatusChart } from "@/components/charts";
+import { WorkspaceSetupCard } from "@/components/dashboard/workspace-setup-card";
 import { useAuth } from "@/hooks/use-auth";
 import { usePermissions } from "@/hooks/use-permissions";
 import { getActivityLabel, getActivitySubject } from "@/lib/activity/presentation";
@@ -74,7 +75,7 @@ function timeAgo(d: string) {
 }
 
 export default function DashboardPage() {
-  const { profile, user } = useAuth();
+  const { profile, user, memberships, isLoading: authLoading, refreshProfile } = useAuth();
   const permissions = usePermissions();
   const { currentOrg } = useOrgStore();
   const addToast = useUIStore((s) => s.addToast);
@@ -84,6 +85,7 @@ export default function DashboardPage() {
   const savedReportPresets = useUIStore((s) => s.savedReportPresets);
   const savedBillingRecoveryPresets = useUIStore((s) => s.savedBillingRecoveryPresets);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [revenueData, setRevenueData] = useState<RevenueDataPoint[]>([]);
   const [statusData, setStatusData] = useState<StatusDistribution[]>([]);
@@ -108,143 +110,184 @@ export default function DashboardPage() {
   const isViewerDashboard = permissions.role === "viewer";
 
   const fetchData = useCallback(async () => {
-    if (!currentOrg) return;
-    const sb = getSupabaseBrowserClient();
-    const assignedClientIds = isVendorDashboard
-      ? await fetchVendorAssignedClientIds(sb, currentOrg.id, user?.id)
-      : [];
-
-    if (isVendorDashboard && assignedClientIds.length === 0) {
-      setInvoices([]);
-      setClients([]);
-      setRecent([]);
-      setActivity([]);
-      setReminders([]);
-      setWorkflowActivity([]);
-      setStats({
-        totalRevenue: 0,
-        revenueChange: 0,
-        invoicesSent: 0,
-        invoicesChange: 0,
-        activeClients: 0,
-        clientsChange: 0,
-        overdueAmount: 0,
-        overdueChange: 0,
-      });
-      setRevenueData([]);
-      setStatusData([]);
-      setOperationsPulse(buildReportSnapshot([], [], { range: "90d", status: "all" }));
+    if (!currentOrg) {
       setLoading(false);
+      setLoadError(null);
       return;
     }
 
-    let invoiceQuery = sb
-      .from("invoices")
-      .select("*, client:clients(id, name, company)")
-      .eq("org_id", currentOrg.id)
-      .order("created_at", { ascending: false });
-    let clientQuery = sb
-      .from("clients")
-      .select("*")
-      .eq("org_id", currentOrg.id)
-      .eq("is_active", true);
+    setLoading(true);
+    setLoadError(null);
 
-    if (isVendorDashboard) {
-      invoiceQuery = invoiceQuery.in("client_id", assignedClientIds);
-      clientQuery = clientQuery.in("id", assignedClientIds);
+    try {
+      const sb = getSupabaseBrowserClient();
+      const assignedClientIds = isVendorDashboard
+        ? await fetchVendorAssignedClientIds(sb, currentOrg.id, user?.id)
+        : [];
+
+      if (isVendorDashboard && assignedClientIds.length === 0) {
+        setInvoices([]);
+        setClients([]);
+        setRecent([]);
+        setActivity([]);
+        setReminders([]);
+        setWorkflowActivity([]);
+        setStats({
+          totalRevenue: 0,
+          revenueChange: 0,
+          invoicesSent: 0,
+          invoicesChange: 0,
+          activeClients: 0,
+          clientsChange: 0,
+          overdueAmount: 0,
+          overdueChange: 0,
+        });
+        setRevenueData([]);
+        setStatusData([]);
+        setOperationsPulse(buildReportSnapshot([], [], { range: "90d", status: "all" }));
+        setLoading(false);
+        return;
+      }
+
+      let invoiceQuery = sb
+        .from("invoices")
+        .select("*, client:clients(id, name, company)")
+        .eq("org_id", currentOrg.id)
+        .order("created_at", { ascending: false });
+      let clientQuery = sb
+        .from("clients")
+        .select("*")
+        .eq("org_id", currentOrg.id)
+        .eq("is_active", true);
+
+      if (isVendorDashboard) {
+        invoiceQuery = invoiceQuery.in("client_id", assignedClientIds);
+        clientQuery = clientQuery.in("id", assignedClientIds);
+      }
+
+      const [invRes, cliRes] = await Promise.all([invoiceQuery, clientQuery]);
+
+      if (invRes.error) {
+        throw invRes.error;
+      }
+
+      if (cliRes.error) {
+        throw cliRes.error;
+      }
+
+      const invoices = (invRes.data ?? []) as Invoice[];
+      const clients = (cliRes.data ?? []) as Client[];
+      const invoiceIds = invoices.map((invoice) => invoice.id);
+      const [actRes, reminderRes, workflowRes] =
+        invoiceIds.length > 0
+          ? await Promise.all([
+              sb
+                .from("activity_log")
+                .select("*, profile:profiles(full_name, avatar_url)")
+                .eq("org_id", currentOrg.id)
+                .eq("entity_type", "invoice")
+                .in("entity_id", invoiceIds)
+                .order("created_at", { ascending: false })
+                .limit(8),
+              sb
+                .from("activity_log")
+                .select("entity_id, created_at, metadata")
+                .eq("org_id", currentOrg.id)
+                .eq("entity_type", "invoice")
+                .eq("action", "invoice.reminder_sent")
+                .in("entity_id", invoiceIds)
+                .order("created_at", { ascending: false })
+                .limit(100),
+              sb
+                .from("activity_log")
+                .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
+                .eq("org_id", currentOrg.id)
+                .eq("entity_type", "invoice")
+                .in("entity_id", invoiceIds)
+                .order("created_at", { ascending: false })
+                .limit(300),
+            ])
+          : [
+              { data: [] as ActivityEntry[], error: null },
+              { data: [] as ReminderActivityLike[], error: null },
+              {
+                data: [] as Array<{
+                  entity_id: string;
+                  action: string;
+                  created_at: string;
+                  profile?: { full_name: string | null; avatar_url: string | null } | null;
+                }>,
+                error: null,
+              },
+            ];
+
+      if (actRes.error) {
+        throw actRes.error;
+      }
+
+      if (reminderRes.error) {
+        throw reminderRes.error;
+      }
+
+      if (workflowRes.error) {
+        throw workflowRes.error;
+      }
+
+      setInvoices(invoices);
+      setClients(clients);
+      setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
+      setWorkflowActivity(
+        (workflowRes.data ?? []) as Array<{
+          entity_id: string;
+          action: string;
+          created_at: string;
+          profile?: { full_name: string | null; avatar_url: string | null } | null;
+        }>
+      );
+      setRecent(invoices.slice(0, 5));
+      setActivity((actRes.data ?? []) as ActivityEntry[]);
+
+      const paid = invoices.filter(i => i.status === "paid");
+      const totalRev = paid.reduce((s, i) => s + Number(i.total), 0);
+      const overdue = invoices.filter(i => i.status === "overdue");
+      const overdueAmt = overdue.reduce((s, i) => s + Number(i.total), 0);
+      setStats({
+        totalRevenue: totalRev, revenueChange: 20.1,
+        invoicesSent: invoices.filter(i => i.status !== "draft").length, invoicesChange: 12,
+        activeClients: clients.length, clientsChange: 3,
+        overdueAmount: overdueAmt, overdueChange: -4.3,
+      });
+      setOperationsPulse(buildReportSnapshot(invoices, clients, { range: "90d", status: "all" }));
+
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const now = new Date();
+      const chart: RevenueDataPoint[] = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const mi = paid.filter((inv) => { const id = new Date(inv.issue_date); return id.getMonth() === d.getMonth() && id.getFullYear() === d.getFullYear(); });
+        chart.push({ month: months[d.getMonth()], revenue: mi.reduce((s, inv) => s + Number(inv.total), 0), invoices: mi.length });
+      }
+      setRevenueData(chart);
+
+      const smap = new Map<string, { count: number; amount: number }>();
+      invoices.forEach(inv => { const e = smap.get(inv.status) ?? { count: 0, amount: 0 }; e.count++; e.amount += Number(inv.total); smap.set(inv.status, e); });
+      setStatusData(
+        Array.from(smap.entries()).map(([currentStatus, d]) => ({
+          status: currentStatus as Invoice["status"],
+          count: d.count,
+          amount: d.amount,
+        }))
+      );
+      setLoading(false);
+    } catch (error) {
+      console.error("Dashboard data load failed:", error);
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "The workspace data could not be loaded right now."
+      );
+      setLoading(false);
     }
-
-    const [invRes, cliRes] = await Promise.all([invoiceQuery, clientQuery]);
-    const invoices = (invRes.data ?? []) as Invoice[];
-    const clients = (cliRes.data ?? []) as Client[];
-    const invoiceIds = invoices.map((invoice) => invoice.id);
-    const [actRes, reminderRes, workflowRes] =
-      invoiceIds.length > 0
-        ? await Promise.all([
-            sb
-              .from("activity_log")
-              .select("*, profile:profiles(full_name, avatar_url)")
-              .eq("org_id", currentOrg.id)
-              .eq("entity_type", "invoice")
-              .in("entity_id", invoiceIds)
-              .order("created_at", { ascending: false })
-              .limit(8),
-            sb
-              .from("activity_log")
-              .select("entity_id, created_at, metadata")
-              .eq("org_id", currentOrg.id)
-              .eq("entity_type", "invoice")
-              .eq("action", "invoice.reminder_sent")
-              .in("entity_id", invoiceIds)
-              .order("created_at", { ascending: false })
-              .limit(100),
-            sb
-              .from("activity_log")
-              .select("entity_id, action, created_at, profile:profiles(full_name, avatar_url)")
-              .eq("org_id", currentOrg.id)
-              .eq("entity_type", "invoice")
-              .in("entity_id", invoiceIds)
-              .order("created_at", { ascending: false })
-              .limit(300),
-          ])
-        : [
-            { data: [] as ActivityEntry[] },
-            { data: [] as ReminderActivityLike[] },
-            {
-              data: [] as Array<{
-                entity_id: string;
-                action: string;
-                created_at: string;
-                profile?: { full_name: string | null; avatar_url: string | null } | null;
-              }>,
-            },
-          ];
-    setInvoices(invoices);
-    setClients(clients);
-    setReminders((reminderRes.data ?? []) as ReminderActivityLike[]);
-    setWorkflowActivity(
-      (workflowRes.data ?? []) as Array<{
-        entity_id: string;
-        action: string;
-        created_at: string;
-        profile?: { full_name: string | null; avatar_url: string | null } | null;
-      }>
-    );
-    setRecent(invoices.slice(0, 5));
-    setActivity((actRes.data ?? []) as ActivityEntry[]);
-
-    const paid = invoices.filter(i => i.status === "paid");
-    const totalRev = paid.reduce((s, i) => s + Number(i.total), 0);
-    const overdue = invoices.filter(i => i.status === "overdue");
-    const overdueAmt = overdue.reduce((s, i) => s + Number(i.total), 0);
-    setStats({
-      totalRevenue: totalRev, revenueChange: 20.1,
-      invoicesSent: invoices.filter(i => i.status !== "draft").length, invoicesChange: 12,
-      activeClients: clients.length, clientsChange: 3,
-      overdueAmount: overdueAmt, overdueChange: -4.3,
-    });
-    setOperationsPulse(buildReportSnapshot(invoices, clients, { range: "90d", status: "all" }));
-
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const now = new Date();
-    const chart: RevenueDataPoint[] = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const mi = paid.filter((inv) => { const id = new Date(inv.issue_date); return id.getMonth() === d.getMonth() && id.getFullYear() === d.getFullYear(); });
-      chart.push({ month: months[d.getMonth()], revenue: mi.reduce((s, inv) => s + Number(inv.total), 0), invoices: mi.length });
-    }
-    setRevenueData(chart);
-
-    const smap = new Map<string, { count: number; amount: number }>();
-    invoices.forEach(inv => { const e = smap.get(inv.status) ?? { count: 0, amount: 0 }; e.count++; e.amount += Number(inv.total); smap.set(inv.status, e); });
-    setStatusData(
-      Array.from(smap.entries()).map(([currentStatus, d]) => ({
-        status: currentStatus as Invoice["status"],
-        count: d.count,
-        amount: d.amount,
-      }))
-    );
-    setLoading(false);
   }, [currentOrg, isVendorDashboard, user?.id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -440,13 +483,44 @@ export default function DashboardPage() {
     setReminderInvoiceId(null);
   }
 
-  if (loading) return (
+  const isWaitingForWorkspaceResolution = authLoading || (!!user && memberships.length > 0 && !currentOrg);
+  const shouldShowWorkspaceSetup = !authLoading && !!user && memberships.length === 0;
+
+  if (isWaitingForWorkspaceResolution || loading) return (
     <div className="space-y-6">
       <Skeleton className="h-8 w-48" />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32 rounded-xl" />)}</div>
       <Skeleton className="h-80 rounded-xl" />
     </div>
   );
+
+  if (shouldShowWorkspaceSetup) {
+    return (
+      <WorkspaceSetupCard
+        userName={profile?.full_name}
+        onCreated={refreshProfile}
+      />
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Card>
+        <div className="space-y-3">
+          <Badge variant="danger">Workspace load issue</Badge>
+          <h1 className="text-xl font-semibold text-neutral-900 dark:text-white">
+            The dashboard could not load your workspace data
+          </h1>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            {loadError}
+          </p>
+          <Button onClick={() => void fetchData()} className="h-10 w-fit">
+            Retry dashboard load
+          </Button>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
