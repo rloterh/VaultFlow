@@ -6,17 +6,9 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { slugifyWorkspaceName } from "@/lib/onboarding/workspace";
 import { useOrgStore } from "@/stores/org-store";
 import { useUIStore } from "@/stores/ui-store";
-
-function slugifyWorkspaceName(value: string) {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-}
 
 interface WorkspaceSetupCardProps {
   userName?: string | null;

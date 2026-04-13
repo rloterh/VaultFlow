@@ -22,6 +22,16 @@ interface AuthState {
 
 let authSubscription: Subscription | null = null;
 
+async function bootstrapStarterWorkspace() {
+  const response = await fetch("/api/onboarding/bootstrap", {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    throw new Error("Starter workspace bootstrap failed");
+  }
+}
+
 async function loadUserWorkspace(user: User) {
   const supabase = getSupabaseBrowserClient();
 
@@ -38,6 +48,17 @@ async function loadUserWorkspace(user: User) {
     profile,
     memberships: (memberships ?? []) as OrgMembership[],
   };
+}
+
+async function loadOrBootstrapUserWorkspace(user: User) {
+  const initialWorkspace = await loadUserWorkspace(user);
+
+  if (initialWorkspace.memberships.length > 0) {
+    return initialWorkspace;
+  }
+
+  await bootstrapStarterWorkspace();
+  return loadUserWorkspace(user);
 }
 
 async function syncSessionState(
@@ -59,7 +80,7 @@ async function syncSessionState(
   }
 
   const nextUser = session.user;
-  const { profile, memberships } = await loadUserWorkspace(nextUser);
+  const { profile, memberships } = await loadOrBootstrapUserWorkspace(nextUser);
 
   set({
     user: nextUser,
@@ -104,7 +125,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           isInitializing: false,
         });
       } else {
-        const { profile, memberships } = await loadUserWorkspace(user);
+        const { profile, memberships } = await loadOrBootstrapUserWorkspace(user);
         set({
           user,
           profile,
@@ -172,7 +193,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return;
     }
 
-    const { profile, memberships } = await loadUserWorkspace(user);
+    const { profile, memberships } = await loadOrBootstrapUserWorkspace(user);
     set({ profile, memberships });
   },
 }));

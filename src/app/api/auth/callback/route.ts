@@ -11,6 +11,10 @@ export async function GET(request: Request) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (!error) {
+      const { error: bootstrapError } = await supabase.rpc("ensure_user_starter_workspace");
+      if (bootstrapError) {
+        console.error("Starter workspace bootstrap after auth callback failed:", bootstrapError);
+      }
       return NextResponse.redirect(`${origin}${next}`);
     }
   }
